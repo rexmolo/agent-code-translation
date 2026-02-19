@@ -25,7 +25,7 @@ console = Console()
 # Paths
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CODENET_ROOT = REPO_ROOT / "data" / "unprocessed" / "Project_CodeNet"
+CODENET_ROOT = REPO_ROOT / "data" / "RAG" / "unprocessed" / "Project_CodeNet"
 PROBLEM_LIST_CSV = CODENET_ROOT / "metadata" / "problem_list.csv"
 METADATA_DIR = CODENET_ROOT / "metadata"
 DATA_DIR = CODENET_ROOT / "data"

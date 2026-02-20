@@ -1,0 +1,1670 @@
+{
+  "source_code": "def fibonacci(n: int) -> int:\n    if n <= 1:\n        return n\n    a, b = 0, 1\n    for _ in range(2, n + 1):\n        a, b = b, a + b\n    return b\n\n\nclass Calculator:\n    def __init__(self, value: float = 0):\n        self.value = value\n\n    def add(self, x: float) -> \"Calculator\":\n        self.value += x\n        return self\n",
+  "ast": {
+    "type": "module",
+    "start": [
+      0,
+      0
+    ],
+    "end": [
+      16,
+      0
+    ],
+    "children": [
+      {
+        "type": "function_definition",
+        "start": [
+          0,
+          0
+        ],
+        "end": [
+          6,
+          12
+        ],
+        "children": [
+          {
+            "type": "def",
+            "start": [
+              0,
+              0
+            ],
+            "end": [
+              0,
+              3
+            ],
+            "text": "def"
+          },
+          {
+            "type": "identifier",
+            "start": [
+              0,
+              4
+            ],
+            "end": [
+              0,
+              13
+            ],
+            "text": "fibonacci"
+          },
+          {
+            "type": "parameters",
+            "start": [
+              0,
+              13
+            ],
+            "end": [
+              0,
+              21
+            ],
+            "children": [
+              {
+                "type": "(",
+                "start": [
+                  0,
+                  13
+                ],
+                "end": [
+                  0,
+                  14
+                ],
+                "text": "("
+              },
+              {
+                "type": "typed_parameter",
+                "start": [
+                  0,
+                  14
+                ],
+                "end": [
+                  0,
+                  20
+                ],
+                "children": [
+                  {
+                    "type": "identifier",
+                    "start": [
+                      0,
+                      14
+                    ],
+                    "end": [
+                      0,
+                      15
+                    ],
+                    "text": "n"
+                  },
+                  {
+                    "type": ":",
+                    "start": [
+                      0,
+                      15
+                    ],
+                    "end": [
+                      0,
+                      16
+                    ],
+                    "text": ":"
+                  },
+                  {
+                    "type": "type",
+                    "start": [
+                      0,
+                      17
+                    ],
+                    "end": [
+                      0,
+                      20
+                    ],
+                    "children": [
+                      {
+                        "type": "identifier",
+                        "start": [
+                          0,
+                          17
+                        ],
+                        "end": [
+                          0,
+                          20
+                        ],
+                        "text": "int"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": ")",
+                "start": [
+                  0,
+                  20
+                ],
+                "end": [
+                  0,
+                  21
+                ],
+                "text": ")"
+              }
+            ]
+          },
+          {
+            "type": "->",
+            "start": [
+              0,
+              22
+            ],
+            "end": [
+              0,
+              24
+            ],
+            "text": "->"
+          },
+          {
+            "type": "type",
+            "start": [
+              0,
+              25
+            ],
+            "end": [
+              0,
+              28
+            ],
+            "children": [
+              {
+                "type": "identifier",
+                "start": [
+                  0,
+                  25
+                ],
+                "end": [
+                  0,
+                  28
+                ],
+                "text": "int"
+              }
+            ]
+          },
+          {
+            "type": ":",
+            "start": [
+              0,
+              28
+            ],
+            "end": [
+              0,
+              29
+            ],
+            "text": ":"
+          },
+          {
+            "type": "block",
+            "start": [
+              1,
+              4
+            ],
+            "end": [
+              6,
+              12
+            ],
+            "children": [
+              {
+                "type": "if_statement",
+                "start": [
+                  1,
+                  4
+                ],
+                "end": [
+                  2,
+                  16
+                ],
+                "children": [
+                  {
+                    "type": "if",
+                    "start": [
+                      1,
+                      4
+                    ],
+                    "end": [
+                      1,
+                      6
+                    ],
+                    "text": "if"
+                  },
+                  {
+                    "type": "comparison_operator",
+                    "start": [
+                      1,
+                      7
+                    ],
+                    "end": [
+                      1,
+                      13
+                    ],
+                    "children": [
+                      {
+                        "type": "identifier",
+                        "start": [
+                          1,
+                          7
+                        ],
+                        "end": [
+                          1,
+                          8
+                        ],
+                        "text": "n"
+                      },
+                      {
+                        "type": "<=",
+                        "start": [
+                          1,
+                          9
+                        ],
+                        "end": [
+                          1,
+                          11
+                        ],
+                        "text": "<="
+                      },
+                      {
+                        "type": "integer",
+                        "start": [
+                          1,
+                          12
+                        ],
+                        "end": [
+                          1,
+                          13
+                        ],
+                        "text": "1"
+                      }
+                    ]
+                  },
+                  {
+                    "type": ":",
+                    "start": [
+                      1,
+                      13
+                    ],
+                    "end": [
+                      1,
+                      14
+                    ],
+                    "text": ":"
+                  },
+                  {
+                    "type": "block",
+                    "start": [
+                      2,
+                      8
+                    ],
+                    "end": [
+                      2,
+                      16
+                    ],
+                    "children": [
+                      {
+                        "type": "return_statement",
+                        "start": [
+                          2,
+                          8
+                        ],
+                        "end": [
+                          2,
+                          16
+                        ],
+                        "children": [
+                          {
+                            "type": "return",
+                            "start": [
+                              2,
+                              8
+                            ],
+                            "end": [
+                              2,
+                              14
+                            ],
+                            "text": "return"
+                          },
+                          {
+                            "type": "identifier",
+                            "start": [
+                              2,
+                              15
+                            ],
+                            "end": [
+                              2,
+                              16
+                            ],
+                            "text": "n"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "expression_statement",
+                "start": [
+                  3,
+                  4
+                ],
+                "end": [
+                  3,
+                  15
+                ],
+                "children": [
+                  {
+                    "type": "assignment",
+                    "start": [
+                      3,
+                      4
+                    ],
+                    "end": [
+                      3,
+                      15
+                    ],
+                    "children": [
+                      {
+                        "type": "pattern_list",
+                        "start": [
+                          3,
+                          4
+                        ],
+                        "end": [
+                          3,
+                          8
+                        ],
+                        "children": [
+                          {
+                            "type": "identifier",
+                            "start": [
+                              3,
+                              4
+                            ],
+                            "end": [
+                              3,
+                              5
+                            ],
+                            "text": "a"
+                          },
+                          {
+                            "type": ",",
+                            "start": [
+                              3,
+                              5
+                            ],
+                            "end": [
+                              3,
+                              6
+                            ],
+                            "text": ","
+                          },
+                          {
+                            "type": "identifier",
+                            "start": [
+                              3,
+                              7
+                            ],
+                            "end": [
+                              3,
+                              8
+                            ],
+                            "text": "b"
+                          }
+                        ]
+                      },
+                      {
+                        "type": "=",
+                        "start": [
+                          3,
+                          9
+                        ],
+                        "end": [
+                          3,
+                          10
+                        ],
+                        "text": "="
+                      },
+                      {
+                        "type": "expression_list",
+                        "start": [
+                          3,
+                          11
+                        ],
+                        "end": [
+                          3,
+                          15
+                        ],
+                        "children": [
+                          {
+                            "type": "integer",
+                            "start": [
+                              3,
+                              11
+                            ],
+                            "end": [
+                              3,
+                              12
+                            ],
+                            "text": "0"
+                          },
+                          {
+                            "type": ",",
+                            "start": [
+                              3,
+                              12
+                            ],
+                            "end": [
+                              3,
+                              13
+                            ],
+                            "text": ","
+                          },
+                          {
+                            "type": "integer",
+                            "start": [
+                              3,
+                              14
+                            ],
+                            "end": [
+                              3,
+                              15
+                            ],
+                            "text": "1"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "for_statement",
+                "start": [
+                  4,
+                  4
+                ],
+                "end": [
+                  5,
+                  23
+                ],
+                "children": [
+                  {
+                    "type": "for",
+                    "start": [
+                      4,
+                      4
+                    ],
+                    "end": [
+                      4,
+                      7
+                    ],
+                    "text": "for"
+                  },
+                  {
+                    "type": "identifier",
+                    "start": [
+                      4,
+                      8
+                    ],
+                    "end": [
+                      4,
+                      9
+                    ],
+                    "text": "_"
+                  },
+                  {
+                    "type": "in",
+                    "start": [
+                      4,
+                      10
+                    ],
+                    "end": [
+                      4,
+                      12
+                    ],
+                    "text": "in"
+                  },
+                  {
+                    "type": "call",
+                    "start": [
+                      4,
+                      13
+                    ],
+                    "end": [
+                      4,
+                      28
+                    ],
+                    "children": [
+                      {
+                        "type": "identifier",
+                        "start": [
+                          4,
+                          13
+                        ],
+                        "end": [
+                          4,
+                          18
+                        ],
+                        "text": "range"
+                      },
+                      {
+                        "type": "argument_list",
+                        "start": [
+                          4,
+                          18
+                        ],
+                        "end": [
+                          4,
+                          28
+                        ],
+                        "children": [
+                          {
+                            "type": "(",
+                            "start": [
+                              4,
+                              18
+                            ],
+                            "end": [
+                              4,
+                              19
+                            ],
+                            "text": "("
+                          },
+                          {
+                            "type": "integer",
+                            "start": [
+                              4,
+                              19
+                            ],
+                            "end": [
+                              4,
+                              20
+                            ],
+                            "text": "2"
+                          },
+                          {
+                            "type": ",",
+                            "start": [
+                              4,
+                              20
+                            ],
+                            "end": [
+                              4,
+                              21
+                            ],
+                            "text": ","
+                          },
+                          {
+                            "type": "binary_operator",
+                            "start": [
+                              4,
+                              22
+                            ],
+                            "end": [
+                              4,
+                              27
+                            ],
+                            "children": [
+                              {
+                                "type": "identifier",
+                                "start": [
+                                  4,
+                                  22
+                                ],
+                                "end": [
+                                  4,
+                                  23
+                                ],
+                                "text": "n"
+                              },
+                              {
+                                "type": "+",
+                                "start": [
+                                  4,
+                                  24
+                                ],
+                                "end": [
+                                  4,
+                                  25
+                                ],
+                                "text": "+"
+                              },
+                              {
+                                "type": "integer",
+                                "start": [
+                                  4,
+                                  26
+                                ],
+                                "end": [
+                                  4,
+                                  27
+                                ],
+                                "text": "1"
+                              }
+                            ]
+                          },
+                          {
+                            "type": ")",
+                            "start": [
+                              4,
+                              27
+                            ],
+                            "end": [
+                              4,
+                              28
+                            ],
+                            "text": ")"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": ":",
+                    "start": [
+                      4,
+                      28
+                    ],
+                    "end": [
+                      4,
+                      29
+                    ],
+                    "text": ":"
+                  },
+                  {
+                    "type": "block",
+                    "start": [
+                      5,
+                      8
+                    ],
+                    "end": [
+                      5,
+                      23
+                    ],
+                    "children": [
+                      {
+                        "type": "expression_statement",
+                        "start": [
+                          5,
+                          8
+                        ],
+                        "end": [
+                          5,
+                          23
+                        ],
+                        "children": [
+                          {
+                            "type": "assignment",
+                            "start": [
+                              5,
+                              8
+                            ],
+                            "end": [
+                              5,
+                              23
+                            ],
+                            "children": [
+                              {
+                                "type": "pattern_list",
+                                "start": [
+                                  5,
+                                  8
+                                ],
+                                "end": [
+                                  5,
+                                  12
+                                ],
+                                "children": [
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      5,
+                                      8
+                                    ],
+                                    "end": [
+                                      5,
+                                      9
+                                    ],
+                                    "text": "a"
+                                  },
+                                  {
+                                    "type": ",",
+                                    "start": [
+                                      5,
+                                      9
+                                    ],
+                                    "end": [
+                                      5,
+                                      10
+                                    ],
+                                    "text": ","
+                                  },
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      5,
+                                      11
+                                    ],
+                                    "end": [
+                                      5,
+                                      12
+                                    ],
+                                    "text": "b"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "=",
+                                "start": [
+                                  5,
+                                  13
+                                ],
+                                "end": [
+                                  5,
+                                  14
+                                ],
+                                "text": "="
+                              },
+                              {
+                                "type": "expression_list",
+                                "start": [
+                                  5,
+                                  15
+                                ],
+                                "end": [
+                                  5,
+                                  23
+                                ],
+                                "children": [
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      5,
+                                      15
+                                    ],
+                                    "end": [
+                                      5,
+                                      16
+                                    ],
+                                    "text": "b"
+                                  },
+                                  {
+                                    "type": ",",
+                                    "start": [
+                                      5,
+                                      16
+                                    ],
+                                    "end": [
+                                      5,
+                                      17
+                                    ],
+                                    "text": ","
+                                  },
+                                  {
+                                    "type": "binary_operator",
+                                    "start": [
+                                      5,
+                                      18
+                                    ],
+                                    "end": [
+                                      5,
+                                      23
+                                    ],
+                                    "children": [
+                                      {
+                                        "type": "identifier",
+                                        "start": [
+                                          5,
+                                          18
+                                        ],
+                                        "end": [
+                                          5,
+                                          19
+                                        ],
+                                        "text": "a"
+                                      },
+                                      {
+                                        "type": "+",
+                                        "start": [
+                                          5,
+                                          20
+                                        ],
+                                        "end": [
+                                          5,
+                                          21
+                                        ],
+                                        "text": "+"
+                                      },
+                                      {
+                                        "type": "identifier",
+                                        "start": [
+                                          5,
+                                          22
+                                        ],
+                                        "end": [
+                                          5,
+                                          23
+                                        ],
+                                        "text": "b"
+                                      }
+                                    ]
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "return_statement",
+                "start": [
+                  6,
+                  4
+                ],
+                "end": [
+                  6,
+                  12
+                ],
+                "children": [
+                  {
+                    "type": "return",
+                    "start": [
+                      6,
+                      4
+                    ],
+                    "end": [
+                      6,
+                      10
+                    ],
+                    "text": "return"
+                  },
+                  {
+                    "type": "identifier",
+                    "start": [
+                      6,
+                      11
+                    ],
+                    "end": [
+                      6,
+                      12
+                    ],
+                    "text": "b"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "class_definition",
+        "start": [
+          9,
+          0
+        ],
+        "end": [
+          15,
+          19
+        ],
+        "children": [
+          {
+            "type": "class",
+            "start": [
+              9,
+              0
+            ],
+            "end": [
+              9,
+              5
+            ],
+            "text": "class"
+          },
+          {
+            "type": "identifier",
+            "start": [
+              9,
+              6
+            ],
+            "end": [
+              9,
+              16
+            ],
+            "text": "Calculator"
+          },
+          {
+            "type": ":",
+            "start": [
+              9,
+              16
+            ],
+            "end": [
+              9,
+              17
+            ],
+            "text": ":"
+          },
+          {
+            "type": "block",
+            "start": [
+              10,
+              4
+            ],
+            "end": [
+              15,
+              19
+            ],
+            "children": [
+              {
+                "type": "function_definition",
+                "start": [
+                  10,
+                  4
+                ],
+                "end": [
+                  11,
+                  26
+                ],
+                "children": [
+                  {
+                    "type": "def",
+                    "start": [
+                      10,
+                      4
+                    ],
+                    "end": [
+                      10,
+                      7
+                    ],
+                    "text": "def"
+                  },
+                  {
+                    "type": "identifier",
+                    "start": [
+                      10,
+                      8
+                    ],
+                    "end": [
+                      10,
+                      16
+                    ],
+                    "text": "__init__"
+                  },
+                  {
+                    "type": "parameters",
+                    "start": [
+                      10,
+                      16
+                    ],
+                    "end": [
+                      10,
+                      40
+                    ],
+                    "children": [
+                      {
+                        "type": "(",
+                        "start": [
+                          10,
+                          16
+                        ],
+                        "end": [
+                          10,
+                          17
+                        ],
+                        "text": "("
+                      },
+                      {
+                        "type": "identifier",
+                        "start": [
+                          10,
+                          17
+                        ],
+                        "end": [
+                          10,
+                          21
+                        ],
+                        "text": "self"
+                      },
+                      {
+                        "type": ",",
+                        "start": [
+                          10,
+                          21
+                        ],
+                        "end": [
+                          10,
+                          22
+                        ],
+                        "text": ","
+                      },
+                      {
+                        "type": "typed_default_parameter",
+                        "start": [
+                          10,
+                          23
+                        ],
+                        "end": [
+                          10,
+                          39
+                        ],
+                        "children": [
+                          {
+                            "type": "identifier",
+                            "start": [
+                              10,
+                              23
+                            ],
+                            "end": [
+                              10,
+                              28
+                            ],
+                            "text": "value"
+                          },
+                          {
+                            "type": ":",
+                            "start": [
+                              10,
+                              28
+                            ],
+                            "end": [
+                              10,
+                              29
+                            ],
+                            "text": ":"
+                          },
+                          {
+                            "type": "type",
+                            "start": [
+                              10,
+                              30
+                            ],
+                            "end": [
+                              10,
+                              35
+                            ],
+                            "children": [
+                              {
+                                "type": "identifier",
+                                "start": [
+                                  10,
+                                  30
+                                ],
+                                "end": [
+                                  10,
+                                  35
+                                ],
+                                "text": "float"
+                              }
+                            ]
+                          },
+                          {
+                            "type": "=",
+                            "start": [
+                              10,
+                              36
+                            ],
+                            "end": [
+                              10,
+                              37
+                            ],
+                            "text": "="
+                          },
+                          {
+                            "type": "integer",
+                            "start": [
+                              10,
+                              38
+                            ],
+                            "end": [
+                              10,
+                              39
+                            ],
+                            "text": "0"
+                          }
+                        ]
+                      },
+                      {
+                        "type": ")",
+                        "start": [
+                          10,
+                          39
+                        ],
+                        "end": [
+                          10,
+                          40
+                        ],
+                        "text": ")"
+                      }
+                    ]
+                  },
+                  {
+                    "type": ":",
+                    "start": [
+                      10,
+                      40
+                    ],
+                    "end": [
+                      10,
+                      41
+                    ],
+                    "text": ":"
+                  },
+                  {
+                    "type": "block",
+                    "start": [
+                      11,
+                      8
+                    ],
+                    "end": [
+                      11,
+                      26
+                    ],
+                    "children": [
+                      {
+                        "type": "expression_statement",
+                        "start": [
+                          11,
+                          8
+                        ],
+                        "end": [
+                          11,
+                          26
+                        ],
+                        "children": [
+                          {
+                            "type": "assignment",
+                            "start": [
+                              11,
+                              8
+                            ],
+                            "end": [
+                              11,
+                              26
+                            ],
+                            "children": [
+                              {
+                                "type": "attribute",
+                                "start": [
+                                  11,
+                                  8
+                                ],
+                                "end": [
+                                  11,
+                                  18
+                                ],
+                                "children": [
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      11,
+                                      8
+                                    ],
+                                    "end": [
+                                      11,
+                                      12
+                                    ],
+                                    "text": "self"
+                                  },
+                                  {
+                                    "type": ".",
+                                    "start": [
+                                      11,
+                                      12
+                                    ],
+                                    "end": [
+                                      11,
+                                      13
+                                    ],
+                                    "text": "."
+                                  },
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      11,
+                                      13
+                                    ],
+                                    "end": [
+                                      11,
+                                      18
+                                    ],
+                                    "text": "value"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "=",
+                                "start": [
+                                  11,
+                                  19
+                                ],
+                                "end": [
+                                  11,
+                                  20
+                                ],
+                                "text": "="
+                              },
+                              {
+                                "type": "identifier",
+                                "start": [
+                                  11,
+                                  21
+                                ],
+                                "end": [
+                                  11,
+                                  26
+                                ],
+                                "text": "value"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "function_definition",
+                "start": [
+                  13,
+                  4
+                ],
+                "end": [
+                  15,
+                  19
+                ],
+                "children": [
+                  {
+                    "type": "def",
+                    "start": [
+                      13,
+                      4
+                    ],
+                    "end": [
+                      13,
+                      7
+                    ],
+                    "text": "def"
+                  },
+                  {
+                    "type": "identifier",
+                    "start": [
+                      13,
+                      8
+                    ],
+                    "end": [
+                      13,
+                      11
+                    ],
+                    "text": "add"
+                  },
+                  {
+                    "type": "parameters",
+                    "start": [
+                      13,
+                      11
+                    ],
+                    "end": [
+                      13,
+                      27
+                    ],
+                    "children": [
+                      {
+                        "type": "(",
+                        "start": [
+                          13,
+                          11
+                        ],
+                        "end": [
+                          13,
+                          12
+                        ],
+                        "text": "("
+                      },
+                      {
+                        "type": "identifier",
+                        "start": [
+                          13,
+                          12
+                        ],
+                        "end": [
+                          13,
+                          16
+                        ],
+                        "text": "self"
+                      },
+                      {
+                        "type": ",",
+                        "start": [
+                          13,
+                          16
+                        ],
+                        "end": [
+                          13,
+                          17
+                        ],
+                        "text": ","
+                      },
+                      {
+                        "type": "typed_parameter",
+                        "start": [
+                          13,
+                          18
+                        ],
+                        "end": [
+                          13,
+                          26
+                        ],
+                        "children": [
+                          {
+                            "type": "identifier",
+                            "start": [
+                              13,
+                              18
+                            ],
+                            "end": [
+                              13,
+                              19
+                            ],
+                            "text": "x"
+                          },
+                          {
+                            "type": ":",
+                            "start": [
+                              13,
+                              19
+                            ],
+                            "end": [
+                              13,
+                              20
+                            ],
+                            "text": ":"
+                          },
+                          {
+                            "type": "type",
+                            "start": [
+                              13,
+                              21
+                            ],
+                            "end": [
+                              13,
+                              26
+                            ],
+                            "children": [
+                              {
+                                "type": "identifier",
+                                "start": [
+                                  13,
+                                  21
+                                ],
+                                "end": [
+                                  13,
+                                  26
+                                ],
+                                "text": "float"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "type": ")",
+                        "start": [
+                          13,
+                          26
+                        ],
+                        "end": [
+                          13,
+                          27
+                        ],
+                        "text": ")"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "->",
+                    "start": [
+                      13,
+                      28
+                    ],
+                    "end": [
+                      13,
+                      30
+                    ],
+                    "text": "->"
+                  },
+                  {
+                    "type": "type",
+                    "start": [
+                      13,
+                      31
+                    ],
+                    "end": [
+                      13,
+                      43
+                    ],
+                    "children": [
+                      {
+                        "type": "string",
+                        "start": [
+                          13,
+                          31
+                        ],
+                        "end": [
+                          13,
+                          43
+                        ],
+                        "children": [
+                          {
+                            "type": "string_start",
+                            "start": [
+                              13,
+                              31
+                            ],
+                            "end": [
+                              13,
+                              32
+                            ],
+                            "text": "\""
+                          },
+                          {
+                            "type": "string_content",
+                            "start": [
+                              13,
+                              32
+                            ],
+                            "end": [
+                              13,
+                              42
+                            ],
+                            "text": "Calculator"
+                          },
+                          {
+                            "type": "string_end",
+                            "start": [
+                              13,
+                              42
+                            ],
+                            "end": [
+                              13,
+                              43
+                            ],
+                            "text": "\""
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "type": ":",
+                    "start": [
+                      13,
+                      43
+                    ],
+                    "end": [
+                      13,
+                      44
+                    ],
+                    "text": ":"
+                  },
+                  {
+                    "type": "block",
+                    "start": [
+                      14,
+                      8
+                    ],
+                    "end": [
+                      15,
+                      19
+                    ],
+                    "children": [
+                      {
+                        "type": "expression_statement",
+                        "start": [
+                          14,
+                          8
+                        ],
+                        "end": [
+                          14,
+                          23
+                        ],
+                        "children": [
+                          {
+                            "type": "augmented_assignment",
+                            "start": [
+                              14,
+                              8
+                            ],
+                            "end": [
+                              14,
+                              23
+                            ],
+                            "children": [
+                              {
+                                "type": "attribute",
+                                "start": [
+                                  14,
+                                  8
+                                ],
+                                "end": [
+                                  14,
+                                  18
+                                ],
+                                "children": [
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      14,
+                                      8
+                                    ],
+                                    "end": [
+                                      14,
+                                      12
+                                    ],
+                                    "text": "self"
+                                  },
+                                  {
+                                    "type": ".",
+                                    "start": [
+                                      14,
+                                      12
+                                    ],
+                                    "end": [
+                                      14,
+                                      13
+                                    ],
+                                    "text": "."
+                                  },
+                                  {
+                                    "type": "identifier",
+                                    "start": [
+                                      14,
+                                      13
+                                    ],
+                                    "end": [
+                                      14,
+                                      18
+                                    ],
+                                    "text": "value"
+                                  }
+                                ]
+                              },
+                              {
+                                "type": "+=",
+                                "start": [
+                                  14,
+                                  19
+                                ],
+                                "end": [
+                                  14,
+                                  21
+                                ],
+                                "text": "+="
+                              },
+                              {
+                                "type": "identifier",
+                                "start": [
+                                  14,
+                                  22
+                                ],
+                                "end": [
+                                  14,
+                                  23
+                                ],
+                                "text": "x"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "type": "return_statement",
+                        "start": [
+                          15,
+                          8
+                        ],
+                        "end": [
+                          15,
+                          19
+                        ],
+                        "children": [
+                          {
+                            "type": "return",
+                            "start": [
+                              15,
+                              8
+                            ],
+                            "end": [
+                              15,
+                              14
+                            ],
+                            "text": "return"
+                          },
+                          {
+                            "type": "identifier",
+                            "start": [
+                              15,
+                              15
+                            ],
+                            "end": [
+                              15,
+                              19
+                            ],
+                            "text": "self"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

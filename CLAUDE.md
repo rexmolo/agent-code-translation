@@ -4,6 +4,7 @@
 - This is a thesis experiment project which is about to build a agent code translation system. 
 - It focuses on the code translation Python to Go.
 - All docs in the docs/ folder contain the documentation of the project
+- First, read the MD files whenever you enter a new folder to understand what the folder is about.
 
 
 ## Project Structure

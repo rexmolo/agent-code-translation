@@ -1,19 +1,15 @@
-"""Entry point: translate Python files to Go and evaluate the results.
+"""Entry point: translate Python files to Go.
 
 Usage:
     uv run python src/lab/00_get_hands_on/run.py [--source-dir PATH]
+    uv run python -m src.cli translate
+    uv run python -m src.cli evaluate
 
-Test Pass Rate workflow:
-    1. Look for existing Python test files (test_*.py or *_test.py) in the source dir.
-    2. If no tests exist, the team's TestGenerator agent will generate them.
-    3. Python tests are verified against the source before proceeding.
-    4. The TestTranslator agent translates verified Python tests to Go tests.
-    5. Go tests are run with `go test` and results feed into the Test Pass Rate metric.
+Evaluation can be run separately after translation completes.
 """
 
 import argparse
 import importlib
-import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -26,10 +22,9 @@ from src.config import TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
 
 _models = importlib.import_module("src.lab.00_get_hands_on.models")
 _metrics = importlib.import_module("src.lab.00_get_hands_on.metrics")
-_team = importlib.import_module("src.lab.00_get_hands_on.team")
+_agents = importlib.import_module("src.lab.00_get_hands_on.agents")
 
 TranslationResult = _models.TranslationResult
-TestTranslationResult = _models.TestTranslationResult
 EvaluationRecord = _models.EvaluationRecord
 
 
@@ -180,56 +175,6 @@ def evaluate_file(
     return record
 
 
-def extract_go_code(response) -> str | None:
-    """Extract Go code from the team response."""
-    if isinstance(response.content, TranslationResult):
-        return response.content.go_code
-
-    # Check member runs for TranslationResult
-    if hasattr(response, "member_runs") and response.member_runs:
-        for member_run in response.member_runs:
-            if isinstance(member_run.content, TranslationResult):
-                return member_run.content.go_code
-            member_text = str(member_run.content) if member_run.content else ""
-            if "```go" in member_text:
-                start = member_text.index("```go") + 5
-                end = member_text.index("```", start)
-                return member_text[start:end].strip()
-
-    text = str(response.content) if response.content else ""
-    if "```go" in text:
-        start = text.index("```go") + 5
-        end = text.index("```", start)
-        return text[start:end].strip()
-
-    if "```" in text:
-        start = text.index("```") + 3
-        newline = text.index("\n", start)
-        start = newline + 1
-        end = text.index("```", start)
-        return text[start:end].strip()
-
-    return None
-
-
-def extract_go_test_code(response) -> str | None:
-    """Extract Go test code from the team response."""
-    if hasattr(response, "member_runs") and response.member_runs:
-        for member_run in response.member_runs:
-            if isinstance(member_run.content, TestTranslationResult):
-                return member_run.content.test_code
-
-    # Try to find Go test code blocks in the response text
-    text = str(response.content) if response.content else ""
-    # Look for code that contains "func Test" (Go test signature)
-    for block_match in re.finditer(r"```go\n(.*?)```", text, re.DOTALL):
-        code = block_match.group(1).strip()
-        if "func Test" in code:
-            return code
-
-    return None
-
-
 def preflight_check(console: Console) -> bool:
     """Verify environment before running the pipeline. Returns True if all checks pass."""
     import os
@@ -256,7 +201,6 @@ def preflight_check(console: Console) -> bool:
     if ok:
         console.print("[dim]     Testing API connection...[/dim]")
         try:
-            _agents = importlib.import_module("src.lab.00_get_hands_on.agents")
             agent = _agents.create_translation_agent()
             response = agent.run("Translate to Go: print('hello')", stream=False)
             if response and response.content:
@@ -275,9 +219,113 @@ def preflight_check(console: Console) -> bool:
     return ok
 
 
+def translate(
+    source_dir: Path = TRANSLATION_SOURCE_DIR,
+    target_dir: Path = TRANSLATION_TARGET_DIR,
+    skip_preflight: bool = False,
+) -> None:
+    """Translate all Python files in source_dir to Go files in target_dir."""
+    console = Console()
+
+    if not skip_preflight:
+        if not preflight_check(console):
+            return
+
+    py_files = discover_python_files(source_dir)
+    if not py_files:
+        console.print("[yellow]No Python files found.[/yellow]")
+        return
+
+    console.print(
+        f"Found [bold]{len(py_files)}[/bold] Python file(s) to translate.\n"
+    )
+
+    translator = _agents.create_translation_agent()
+    records: list[dict] = []
+
+    with Progress() as progress:
+        task = progress.add_task("Translating...", total=len(py_files))
+
+        for py_file in py_files:
+            python_code = py_file.read_text(encoding="utf-8")
+            target_file = mirror_path(py_file, source_dir, target_dir, ".go")
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+
+            prompt = (
+                f"Translate the following Python code to Go:\n\n"
+                f"```python\n{python_code}\n```"
+            )
+
+            try:
+                response = translator.run(prompt, stream=False)
+                result = response.content
+
+                if isinstance(result, TranslationResult):
+                    target_file.write_text(result.go_code, encoding="utf-8")
+                    records.append({
+                        "source": str(py_file),
+                        "target": str(target_file),
+                        "status": "ok",
+                    })
+                    console.print(
+                        f"  [green]OK[/green] {py_file.name} -> {target_file.name}"
+                    )
+                else:
+                    records.append({
+                        "source": str(py_file),
+                        "target": str(target_file),
+                        "status": "no structured output",
+                    })
+                    console.print(
+                        f"  [yellow]WARN[/yellow] {py_file.name}: "
+                        f"unexpected response type ({type(result).__name__})"
+                    )
+            except Exception as e:
+                records.append({
+                    "source": str(py_file),
+                    "target": str(target_file),
+                    "status": f"error: {e}",
+                })
+                console.print(f"  [red]FAIL[/red] {py_file.name}: {e}")
+
+            progress.advance(task)
+
+    ok_count = sum(1 for r in records if r["status"] == "ok")
+    console.print(
+        f"\n[bold]Done.[/bold] {ok_count}/{len(records)} files translated successfully."
+    )
+
+
+def evaluate(
+    source_dir: Path = TRANSLATION_SOURCE_DIR,
+    target_dir: Path = TRANSLATION_TARGET_DIR,
+) -> None:
+    """Evaluate all existing translated Go files against their Python sources."""
+    console = Console()
+
+    py_files = discover_python_files(source_dir)
+    if not py_files:
+        console.print("[yellow]No Python files found.[/yellow]")
+        return
+
+    records: list[EvaluationRecord] = []
+
+    with Progress() as progress:
+        task = progress.add_task("Evaluating...", total=len(py_files))
+
+        for py_file in py_files:
+            go_file = mirror_path(py_file, source_dir, target_dir, ".go")
+            record = evaluate_file(py_file, go_file)
+            records.append(record)
+            progress.advance(task)
+
+    _metrics.display_per_file_table(records)
+    summary = _metrics.compute_summary(records)
+    _metrics.display_summary_table(summary)
+
+
 def main():
     load_dotenv()
-    console = Console()
 
     parser = argparse.ArgumentParser(description="Translate Python to Go")
     parser.add_argument(
@@ -299,94 +347,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # Preflight: verify environment and API before processing files
-    if not args.skip_preflight:
-        if not preflight_check(console):
-            return
-
-    py_files = discover_python_files(args.source_dir)
-    if not py_files:
-        console.print("[yellow]No Python files found.[/yellow]")
-        return
-
-    console.print(
-        f"Found [bold]{len(py_files)}[/bold] Python file(s) to translate.\n"
+    translate(
+        source_dir=args.source_dir,
+        target_dir=args.target_dir,
+        skip_preflight=args.skip_preflight,
     )
-
-    # Create the team once (never in a loop)
-    team = _team.create_translation_team()
-    records: list[EvaluationRecord] = []
-
-    with Progress() as progress:
-        task = progress.add_task("Translating & evaluating...", total=len(py_files))
-
-        for py_file in py_files:
-            python_code = py_file.read_text(encoding="utf-8")
-            target_file = mirror_path(
-                py_file, args.source_dir, args.target_dir, ".go"
-            )
-            target_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Check for existing Python tests
-            test_file = find_test_file(py_file)
-            test_context = ""
-            if test_file:
-                test_code = test_file.read_text(encoding="utf-8")
-                test_context = (
-                    f"\n\nExisting Python tests for this file:\n\n"
-                    f"```python\n{test_code}\n```\n\n"
-                    f"These tests have been verified. Translate them to Go tests as well."
-                )
-            else:
-                test_context = (
-                    "\n\nNo existing Python tests found. "
-                    "Generate Python tests first, verify they pass, "
-                    "then translate them to Go tests."
-                )
-
-            prompt = (
-                f"Translate the following Python code to Go:\n\n"
-                f"```python\n{python_code}\n```"
-                f"{test_context}"
-            )
-
-            try:
-                response = team.run(prompt, stream=False)
-
-                go_code = extract_go_code(response)
-                go_test_code = extract_go_test_code(response)
-
-                if go_code:
-                    target_file.write_text(go_code, encoding="utf-8")
-                    # Save Go test file alongside translation
-                    if go_test_code:
-                        test_target = target_file.with_name(
-                            target_file.stem + "_test.go"
-                        )
-                        test_target.write_text(go_test_code, encoding="utf-8")
-                    record = evaluate_file(py_file, target_file, go_test_code)
-                else:
-                    record = EvaluationRecord(
-                        source_file=str(py_file),
-                        target_file=str(target_file),
-                        notes="Could not extract Go code from response",
-                    )
-            except Exception as e:
-                record = EvaluationRecord(
-                    source_file=str(py_file),
-                    target_file=str(target_file),
-                    notes=f"Error: {e}",
-                )
-
-            records.append(record)
-            progress.advance(task)
-
-    # Display results
-    console.print()
-    _metrics.display_per_file_table(records)
-    console.print()
-    summary = _metrics.compute_summary(records)
-    _metrics.display_summary_table(summary)
 
 
 if __name__ == "__main__":

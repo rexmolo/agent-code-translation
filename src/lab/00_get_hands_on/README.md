@@ -14,53 +14,30 @@ the original Python code against the translated Go code directly.
 
 ## Architecture
 
-The pipeline is built on the **Agno** framework, using its **Team** abstraction to
-coordinate four specialized agents via a team leader.
+The pipeline uses a single **Translator** agent that directly translates Python code to
+Go. There is no team coordinator — the pipeline is a simple sequential loop that calls
+the translator once per file, producing exactly **1 LLM call per file**.
+
+Evaluation (compilation, execution, I/O comparison) is available as a separate step and
+can be run manually after translation.
 
 ```
-                        ┌──────────────────┐
-                        │   Team Leader    │
-                        │  (coordinator)   │
-                        └────────┬─────────┘
-               ┌─────────┬──────┴──────┬─────────────┐
-               ▼         ▼             ▼             ▼
-         ┌───────────┐ ┌────────────┐ ┌────────────┐ ┌───────────┐
-         │Translator │ │   Test     │ │   Test     │ │ Evaluator │
-         │           │ │ Generator  │ │ Translator │ │           │
-         │ Python→Go │ │ writes .py │ │ .py tests  │ │ compiles, │
-         │ code      │ │ tests      │ │  → Go tests│ │ runs, and │
-         └───────────┘ └────────────┘ └────────────┘ │ compares  │
-                                                      └───────────┘
+    ┌──────────────┐     ┌───────────────┐     ┌──────────────┐
+    │  Python file  │ ──▶ │  Translator   │ ──▶ │   Go file    │
+    │  (source)     │     │  (1 LLM call) │     │  (target)    │
+    └──────────────┘     └───────────────┘     └──────────────┘
 ```
 
-### Agents
+### Agent
 
 | Agent | Role | Output Schema | Tools |
 |-------|------|---------------|-------|
 | **Translator** | Translates a Python file to idiomatic Go | `TranslationResult` (go_code, explanation) | None (LLM only) |
-| **TestGenerator** | Generates pytest tests for Python source when none exist | `TestGenerationResult` (test_code, explanation) | None (LLM only) |
-| **TestTranslator** | Translates verified Python tests to Go tests | `TestTranslationResult` (test_code, explanation) | None (LLM only) |
-| **Evaluator** | Programmatically checks translation correctness | Free-form text | `compile_go_code`, `run_go_code`, `run_python_code`, `compare_outputs`, `run_python_tests`, `run_go_tests` |
-
-### Team Coordination Flow
-
-The team leader orchestrates the following steps per file:
-
-1. **Translate**: Send Python code to `Translator` → receive Go code.
-2. **Find or generate tests**: Check if Python tests exist. If not, send code to
-   `TestGenerator` to produce them.
-3. **Verify Python tests**: Send generated tests to `Evaluator` to confirm they pass
-   against the original Python source.
-4. **Translate tests**: Send verified Python tests + Go source to `TestTranslator` →
-   receive Go test code.
-5. **Full evaluation**: Send everything to `Evaluator` for compilation, execution, I/O
-   comparison, and Go test execution.
-6. **Return results**: Team leader synthesizes final output.
 
 ## Evaluation Metrics
 
 All metrics are computed without ground truth, by comparing the translated Go code's
-behavior against the original Python source.
+behavior against the original Python source. Evaluation is run separately from translation.
 
 | Metric | What It Measures | How It Is Computed |
 |--------|------------------|--------------------|
@@ -93,8 +70,7 @@ Results are rendered as two Rich tables in the terminal:
 ├── __main__.py        # Enables: python -c "import importlib; ..."
 ├── models.py          # Pydantic schemas for structured LLM output and records
 ├── tools.py           # @tool-decorated functions for code execution (subprocess)
-├── agents.py          # Agent definitions (Translator, TestGenerator, TestTranslator, Evaluator)
-├── team.py            # Agno Team wiring that coordinates all agents
+├── agents.py          # Agent definition (Translator only)
 ├── metrics.py         # Metric aggregation and Rich table rendering
 └── run.py             # Entry point script
 ```
@@ -116,14 +92,8 @@ Results are rendered as two Rich tables in the terminal:
 
 All tools use 30-second timeouts and clean up temp directories automatically.
 
-**`agents.py`** — Creates each agent with its model, instructions, and output schema.
-Uses a shared `_get_model()` factory so the LLM configuration is defined once.
-
-**`team.py`** — Wires the four agents into an Agno `Team` with step-by-step instructions
-for the team leader. Key Team settings:
-- `share_member_interactions=True`: Agents can see each other's outputs.
-- `show_members_responses=True`: Member responses are visible in the final output.
-- `add_member_tools_to_context=False`: Keeps the context clean.
+**`agents.py`** — Creates the Translator agent with its model, instructions, and output
+schema. Uses a `_get_model()` factory so the LLM configuration is defined once.
 
 **`metrics.py`** — Pure computation + display:
 - `compute_summary()`: Aggregates `EvaluationRecord` list into percentage metrics.
@@ -135,14 +105,13 @@ for the team leader. Key Team settings:
 **`run.py`** — The entry point that orchestrates everything:
 1. Loads `.env` for the `MINIMAX_API_KEY`.
 2. Discovers `.py` files (excluding `test_*.py` and `*_test.py`).
-3. For each source file, looks for an existing test file (`test_<name>.py`,
-   `<name>_test.py`, or in a `tests/` subdirectory).
-4. Creates the Team **once** (never inside the loop — Agno best practice).
-5. Sends each file to the Team with test context in the prompt.
-6. Extracts Go code and Go test code from the Team response.
-7. Saves `.go` and `_test.go` files to the target directory.
-8. Runs programmatic evaluation (compile, run, compare, test).
-9. Displays Rich tables.
+3. Creates the Translator agent **once** (never inside the loop).
+4. Sends each file to the Translator directly (1 LLM call per file).
+5. Saves `.go` files to the target directory.
+6. Displays a summary of translated files.
+
+Evaluation (`evaluate_file()`) is available in `run.py` for manual use but is not
+called automatically during translation.
 
 ## Usage
 
@@ -217,12 +186,11 @@ This is a deliberate trade-off to preserve the numbered experiment naming conven
 
 ## LLM Configuration
 
-All agents use **MiniMax-M2.5** via the LiteLLM adapter:
+All agents use **MiniMax-M2.5** via a custom MiniMax model class:
 ```python
-LiteLLM(id="minimax/MiniMax-M2.5", api_key=os.getenv("MINIMAX_API_KEY"))
+MiniMax(id="MiniMax-M2.5")
 ```
-To switch models, modify the `_get_model()` function in `agents.py` and the model in
-`team.py`. The Team leader also needs its own model instance.
+To switch models, modify the `_get_model()` function in `agents.py`.
 
 ## Known Limitations and Future Work
 
@@ -232,10 +200,10 @@ To switch models, modify the `_get_model()` function in `agents.py` and the mode
 - **Empty stdin only**: Programs that require stdin input will fail the I/O equivalence
   check. Future work: parse test cases from problem descriptions or provide sample inputs.
 - **No retry loop**: If translation fails or produces non-compilable code, the pipeline
-  records the failure but does not retry. A feedback loop where the Evaluator's findings
+  records the failure but does not retry. A feedback loop where evaluation findings
   are sent back to the Translator for correction would improve success rates.
 - **Single-file scope**: Each file is translated independently. Cross-file dependencies
   (imports between modules) are not handled. Project-level translation is a separate
   challenge.
-- **Test generation quality**: LLM-generated tests may not cover all edge cases. The
-  quality of the Test Pass Rate metric depends on the quality of the generated tests.
+- **Evaluation is manual**: The `evaluate_file()` function exists in `run.py` but is not
+  called automatically. A separate evaluation step can be added in future experiments.

@@ -10,6 +10,7 @@ Evaluation can be run separately after translation completes.
 
 import argparse
 import importlib
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,6 +20,7 @@ from rich.console import Console
 from rich.progress import Progress
 
 from src.config import TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
+from src.models.registry import get_enabled_models, get_model_env_var, get_model_vertex_env_vars
 
 _models = importlib.import_module("src.lab.00_get_hands_on.models")
 _metrics = importlib.import_module("src.lab.00_get_hands_on.metrics")
@@ -175,20 +177,35 @@ def evaluate_file(
     return record
 
 
-def preflight_check(console: Console) -> bool:
+def preflight_check(console: Console, enabled_models: list[tuple[str, str, object]]) -> bool:
     """Verify environment before running the pipeline. Returns True if all checks pass."""
-    import os
     import shutil
 
     ok = True
 
-    # 1. API key
-    key = os.getenv("MINIMAX_API_KEY")
-    if not key or len(key) < 10:
-        console.print("[red]FAIL[/red] MINIMAX_API_KEY is not set or invalid in .env")
-        ok = False
-    else:
-        console.print("[green]OK[/green]   MINIMAX_API_KEY is set")
+    # 1. Check API keys for each enabled provider (deduplicate per provider)
+    checked_providers: set[str] = set()
+    for provider_key, variant_key, _model in enabled_models:
+        if provider_key in checked_providers:
+            continue
+        checked_providers.add(provider_key)
+
+        vertex_vars = get_model_vertex_env_vars(provider_key)
+        if vertex_vars and os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true":
+            missing = [v for v in vertex_vars if not os.getenv(v)]
+            if missing:
+                console.print(f"[red]FAIL[/red] Vertex AI vars missing: {', '.join(missing)}")
+                ok = False
+            else:
+                console.print(f"[green]OK[/green]   Vertex AI credentials set for {provider_key}")
+        else:
+            env_var = get_model_env_var(provider_key)
+            key = os.getenv(env_var)
+            if not key or len(key) < 10:
+                console.print(f"[red]FAIL[/red] {env_var} is not set or invalid in .env")
+                ok = False
+            else:
+                console.print(f"[green]OK[/green]   {env_var} is set")
 
     # 2. Go compiler
     if shutil.which("go"):
@@ -197,20 +214,22 @@ def preflight_check(console: Console) -> bool:
         console.print("[red]FAIL[/red] Go compiler not found on PATH")
         ok = False
 
-    # 3. API connection test
+    # 3. API connection test for each enabled model variant
     if ok:
-        console.print("[dim]     Testing API connection...[/dim]")
-        try:
-            agent = _agents.create_translation_agent()
-            response = agent.run("Translate to Go: print('hello')", stream=False)
-            if response and response.content:
-                console.print("[green]OK[/green]   MiniMax API responded")
-            else:
-                console.print("[red]FAIL[/red] MiniMax API returned empty response")
+        for provider_key, variant_key, model in enabled_models:
+            label = f"{provider_key}/{variant_key}"
+            console.print(f"[dim]     Testing {label} API connection...[/dim]")
+            try:
+                agent = _agents.create_translation_agent(model)
+                response = agent.run("Translate to Go: print('hello')", stream=False)
+                if response and response.content:
+                    console.print(f"[green]OK[/green]   {label} API responded")
+                else:
+                    console.print(f"[red]FAIL[/red] {label} API returned empty response")
+                    ok = False
+            except Exception as e:
+                console.print(f"[red]FAIL[/red] {label} API connection failed: {e}")
                 ok = False
-        except Exception as e:
-            console.print(f"[red]FAIL[/red] MiniMax API connection failed: {e}")
-            ok = False
 
     if not ok:
         console.print("\n[bold red]Preflight failed. Fix the issues above before running.[/bold red]")
@@ -224,11 +243,20 @@ def translate(
     target_dir: Path = TRANSLATION_TARGET_DIR,
     skip_preflight: bool = False,
 ) -> None:
-    """Translate all Python files in source_dir to Go files in target_dir."""
+    """Translate all Python files in source_dir to Go files in target_dir.
+
+    Loops over enabled models. Each model's output is saved under
+    target_dir/<provider>/<variant>/ (e.g. target/gemini/2.5_flash_lite/).
+    """
     console = Console()
 
+    enabled = get_enabled_models()
+    if not enabled:
+        console.print("[red]No models enabled. Enable at least one model.[/red]")
+        return
+
     if not skip_preflight:
-        if not preflight_check(console):
+        if not preflight_check(console, enabled):
             return
 
     py_files = discover_python_files(source_dir)
@@ -240,88 +268,113 @@ def translate(
         f"Found [bold]{len(py_files)}[/bold] Python file(s) to translate.\n"
     )
 
-    translator = _agents.create_translation_agent()
-    records: list[dict] = []
+    for provider_key, variant_key, model in enabled:
+        model_target_dir = target_dir / provider_key / variant_key
+        label = f"{provider_key}/{variant_key}"
+        console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
+        console.print(f"   Output: {model_target_dir}\n")
 
-    with Progress() as progress:
-        task = progress.add_task("Translating...", total=len(py_files))
+        translator = _agents.create_translation_agent(model)
+        records: list[dict] = []
 
-        for py_file in py_files:
-            python_code = py_file.read_text(encoding="utf-8")
-            target_file = mirror_path(py_file, source_dir, target_dir, ".go")
-            target_file.parent.mkdir(parents=True, exist_ok=True)
+        with Progress() as progress:
+            task = progress.add_task(f"Translating ({label})...", total=len(py_files))
 
-            prompt = (
-                f"Translate the following Python code to Go:\n\n"
-                f"```python\n{python_code}\n```"
-            )
+            for py_file in py_files:
+                python_code = py_file.read_text(encoding="utf-8")
+                target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
+                target_file.parent.mkdir(parents=True, exist_ok=True)
 
-            try:
-                response = translator.run(prompt, stream=False)
-                result = response.content
+                prompt = (
+                    f"Translate the following Python code to Go:\n\n"
+                    f"```python\n{python_code}\n```"
+                )
 
-                if isinstance(result, TranslationResult):
-                    target_file.write_text(result.go_code, encoding="utf-8")
+                try:
+                    response = translator.run(prompt, stream=False)
+                    result = response.content
+
+                    if isinstance(result, TranslationResult):
+                        target_file.write_text(result.go_code, encoding="utf-8")
+                        records.append({
+                            "source": str(py_file),
+                            "target": str(target_file),
+                            "status": "ok",
+                        })
+                        progress.console.print(
+                            f"  [green]OK[/green] {py_file.name} -> {target_file.name}"
+                        )
+                    else:
+                        records.append({
+                            "source": str(py_file),
+                            "target": str(target_file),
+                            "status": "no structured output",
+                        })
+                        progress.console.print(
+                            f"  [yellow]WARN[/yellow] {py_file.name}: "
+                            f"unexpected response type ({type(result).__name__})"
+                        )
+                except Exception as e:
                     records.append({
                         "source": str(py_file),
                         "target": str(target_file),
-                        "status": "ok",
+                        "status": f"error: {e}",
                     })
-                    console.print(
-                        f"  [green]OK[/green] {py_file.name} -> {target_file.name}"
-                    )
-                else:
-                    records.append({
-                        "source": str(py_file),
-                        "target": str(target_file),
-                        "status": "no structured output",
-                    })
-                    console.print(
-                        f"  [yellow]WARN[/yellow] {py_file.name}: "
-                        f"unexpected response type ({type(result).__name__})"
-                    )
-            except Exception as e:
-                records.append({
-                    "source": str(py_file),
-                    "target": str(target_file),
-                    "status": f"error: {e}",
-                })
-                console.print(f"  [red]FAIL[/red] {py_file.name}: {e}")
+                    progress.console.print(f"  [red]FAIL[/red] {py_file.name}: {e}")
 
-            progress.advance(task)
+                progress.advance(task)
 
-    ok_count = sum(1 for r in records if r["status"] == "ok")
-    console.print(
-        f"\n[bold]Done.[/bold] {ok_count}/{len(records)} files translated successfully."
-    )
+        ok_count = sum(1 for r in records if r["status"] == "ok")
+        console.print(
+            f"\n[bold]{label}:[/bold] {ok_count}/{len(records)} files translated successfully."
+        )
 
 
 def evaluate(
     source_dir: Path = TRANSLATION_SOURCE_DIR,
     target_dir: Path = TRANSLATION_TARGET_DIR,
 ) -> None:
-    """Evaluate all existing translated Go files against their Python sources."""
+    """Evaluate translated Go files against their Python sources.
+
+    Loops over enabled models. Each model's output is expected under
+    target_dir/<provider>/<variant>/.
+    """
     console = Console()
+
+    enabled = get_enabled_models()
+    if not enabled:
+        console.print("[red]No models enabled. Enable at least one model.[/red]")
+        return
 
     py_files = discover_python_files(source_dir)
     if not py_files:
         console.print("[yellow]No Python files found.[/yellow]")
         return
 
-    records: list[EvaluationRecord] = []
+    for provider_key, variant_key, _model in enabled:
+        model_target_dir = target_dir / provider_key / variant_key
+        label = f"{provider_key}/{variant_key}"
+        console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
+        console.print(f"   Evaluating: {model_target_dir}\n")
 
-    with Progress() as progress:
-        task = progress.add_task("Evaluating...", total=len(py_files))
+        if not model_target_dir.exists():
+            console.print(f"[yellow]No translations found for {label} (directory does not exist).[/yellow]")
+            continue
 
-        for py_file in py_files:
-            go_file = mirror_path(py_file, source_dir, target_dir, ".go")
-            record = evaluate_file(py_file, go_file)
-            records.append(record)
-            progress.advance(task)
+        records: list[EvaluationRecord] = []
 
-    _metrics.display_per_file_table(records)
-    summary = _metrics.compute_summary(records)
-    _metrics.display_summary_table(summary)
+        with Progress() as progress:
+            task = progress.add_task(f"Evaluating ({label})...", total=len(py_files))
+
+            for py_file in py_files:
+                go_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
+                record = evaluate_file(py_file, go_file)
+                records.append(record)
+                progress.advance(task)
+
+        _metrics.display_per_file_table(records)
+        summary = _metrics.compute_summary(records)
+        _metrics.display_summary_table(summary)
 
 
 def main():

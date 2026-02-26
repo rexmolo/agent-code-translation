@@ -4,8 +4,6 @@ import importlib
 
 from agno.agent import Agent
 
-from src.models.minimax import MiniMax
-
 _models = importlib.import_module("src.lab.00_get_hands_on.models")
 
 TranslationResult = _models.TranslationResult
@@ -25,16 +23,16 @@ Rules:
 """
 
 
-def _get_model() -> MiniMax:
-    return MiniMax(id="MiniMax-M2.5")
+def create_translation_agent(model) -> Agent:
+    """Create the Python-to-Go translation agent.
 
-
-def create_translation_agent() -> Agent:
-    """Create the Python-to-Go translation agent."""
+    Args:
+        model: An Agno model instance (e.g. MiniMax, Gemini).
+    """
     return Agent(
         name="Translator",
         role="Translate Python source code to Go",
-        model=_get_model(),
+        model=model,
         instructions=TRANSLATION_INSTRUCTIONS,
         output_schema=TranslationResult,
     )

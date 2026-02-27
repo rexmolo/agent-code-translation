@@ -43,6 +43,36 @@ _SKIP_FUNCTIONS = {
     "load_humaneval_x",
 }
 
+_SAMPLE_OPTIONS = [1, 10, 20]  # fixed sample sizes; None means whole dataset
+
+
+def _dataset_size(dataset: str) -> int | None:
+    """Return the number of items in the dataset (best-effort, no heavy load)."""
+    try:
+        if dataset == "humaneval-x":
+            from src.data.humaneval_x import load_humaneval_x
+            return len(load_humaneval_x())
+        elif dataset == "local":
+            _run_mod = importlib.import_module("src.lab.00_get_hands_on.run")
+            return len(_run_mod.discover_python_files(TRANSLATION_SOURCE_DIR))
+    except Exception:
+        pass
+    return None
+
+
+def _sample_choices(dataset: str) -> list[Choice]:
+    """Build sample-size choices including a dynamic 'Whole' option.
+
+    Uses 0 as sentinel for 'whole dataset' because questionary returns None
+    when the user presses Ctrl+C, so we can't use None as a choice value.
+    """
+    size = _dataset_size(dataset)
+    whole_label = f"Whole dataset ({size})" if size else "Whole dataset"
+    choices = [Choice(title=f"{n} (smoke test)" if n == 1 else str(n), value=n)
+               for n in _SAMPLE_OPTIONS]
+    choices.append(Choice(title=whole_label, value=0))
+    return choices
+
 
 def _load_experiment(experiment: str):
     """Dynamically import an experiment's run module."""
@@ -165,6 +195,18 @@ def _interactive():
 
     if "dataset" in sig.parameters:
         kwargs["dataset"] = selected_dataset
+
+    # Step 4: Sample size (only for translate-like actions that have a 'sample' param)
+    if action != "evaluate":
+        sample_choices = _sample_choices(selected_dataset)
+        selected_sample = _ask_or_abort(questionary.select(
+            "How many to translate?",
+            choices=sample_choices,
+            style=_style,
+        ).ask())
+        if "sample" in sig.parameters:
+            # 0 is the sentinel for "whole dataset" → pass None (no slicing)
+            kwargs["sample"] = selected_sample if selected_sample != 0 else None
 
     if action == "evaluate":
         # For evaluate: pick target folder directly instead of model

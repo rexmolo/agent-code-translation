@@ -281,12 +281,13 @@ def translate(
     target_dir: Path = TRANSLATION_TARGET_DIR,
     skip_preflight: bool = False,
     dataset: str = "local",
+    sample: int | None = None,
 ) -> None:
     """Dispatch translation to the appropriate pipeline based on dataset."""
     if dataset == "local":
-        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight)
+        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample)
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight)
+        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -295,6 +296,7 @@ def _translate_local(
     source_dir: Path,
     target_dir: Path,
     skip_preflight: bool = False,
+    sample: int | None = None,
 ) -> None:
     """Translate local Python files to Go.
 
@@ -316,6 +318,9 @@ def _translate_local(
         console.print("[yellow]No Python files found.[/yellow]")
         return
 
+    if sample is not None:
+        py_files = py_files[:sample]
+
     console.print(
         f"Found [bold]{len(py_files)}[/bold] Python file(s) to translate.\n"
     )
@@ -328,53 +333,60 @@ def _translate_local(
 
         translator = _agents.create_translation_agent(model)
         records: list[dict] = []
+        interrupted = False
 
         with Progress() as progress:
             task = progress.add_task(f"Translating ({label})...", total=len(py_files))
 
-            for py_file in py_files:
-                python_code = py_file.read_text(encoding="utf-8")
-                target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
-                target_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                for py_file in py_files:
+                    python_code = py_file.read_text(encoding="utf-8")
+                    target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
+                    target_file.parent.mkdir(parents=True, exist_ok=True)
 
-                prompt = (
-                    f"Translate the following Python code to Go:\n\n"
-                    f"```python\n{python_code}\n```"
-                )
+                    prompt = (
+                        f"Translate the following Python code to Go:\n\n"
+                        f"```python\n{python_code}\n```"
+                    )
 
-                try:
-                    response = translator.run(prompt, stream=False)
-                    result = response.content
+                    try:
+                        response = translator.run(prompt, stream=False)
+                        result = response.content
 
-                    if isinstance(result, TranslationResult):
-                        target_file.write_text(result.go_code, encoding="utf-8")
+                        if isinstance(result, TranslationResult):
+                            target_file.write_text(result.go_code, encoding="utf-8")
+                            records.append({
+                                "source": str(py_file),
+                                "target": str(target_file),
+                                "status": "ok",
+                            })
+                            progress.console.print(
+                                f"  [green]OK[/green] {py_file.name} -> {target_file.name}"
+                            )
+                        else:
+                            records.append({
+                                "source": str(py_file),
+                                "target": str(target_file),
+                                "status": "no structured output",
+                            })
+                            progress.console.print(
+                                f"  [yellow]WARN[/yellow] {py_file.name}: "
+                                f"unexpected response type ({type(result).__name__})"
+                            )
+                    except Exception as e:
                         records.append({
                             "source": str(py_file),
                             "target": str(target_file),
-                            "status": "ok",
+                            "status": f"error: {e}",
                         })
-                        progress.console.print(
-                            f"  [green]OK[/green] {py_file.name} -> {target_file.name}"
-                        )
-                    else:
-                        records.append({
-                            "source": str(py_file),
-                            "target": str(target_file),
-                            "status": "no structured output",
-                        })
-                        progress.console.print(
-                            f"  [yellow]WARN[/yellow] {py_file.name}: "
-                            f"unexpected response type ({type(result).__name__})"
-                        )
-                except Exception as e:
-                    records.append({
-                        "source": str(py_file),
-                        "target": str(target_file),
-                        "status": f"error: {e}",
-                    })
-                    progress.console.print(f"  [red]FAIL[/red] {py_file.name}: {e}")
+                        progress.console.print(f"  [red]FAIL[/red] {py_file.name}: {e}")
 
-                progress.advance(task)
+                    progress.advance(task)
+            except KeyboardInterrupt:
+                interrupted = True
+
+        if interrupted:
+            console.print("\n[yellow]⚡ Interrupted. Partial results saved.[/yellow]")
 
         ok_count = sum(1 for r in records if r["status"] == "ok")
         console.print(
@@ -385,6 +397,7 @@ def _translate_local(
 def _translate_humaneval_x(
     target_dir: Path,
     skip_preflight: bool = False,
+    sample: int | None = None,
 ) -> None:
     """Translate HumanEval-X Python problems to Go.
 
@@ -405,7 +418,13 @@ def _translate_humaneval_x(
 
     console.print("[dim]Loading HumanEval-X dataset...[/dim]")
     pairs = load_humaneval_x()
-    console.print(f"Loaded [bold]{len(pairs)}[/bold] HumanEval-X problems.\n")
+    console.print(f"Loaded [bold]{len(pairs)}[/bold] HumanEval-X problems.")
+
+    if sample is not None:
+        pairs = pairs[:sample]
+        console.print(f"[dim]Sample mode: translating [bold]{len(pairs)}[/bold] problem(s).\n[/dim]")
+    else:
+        console.print()
 
     for provider_key, variant_key, model in enabled:
         model_target_dir = target_dir / provider_key / variant_key
@@ -416,61 +435,68 @@ def _translate_humaneval_x(
 
         translator = _agents.create_translation_agent(model)
         records: list[dict] = []
+        interrupted = False
 
         with Progress() as progress:
             task = progress.add_task(f"Translating ({label})...", total=len(pairs))
 
-            for pair in pairs:
-                task_num = pair["task_id"].split("/")[1]
-                target_file = model_target_dir / f"Go_{task_num}.go"
+            try:
+                for pair in pairs:
+                    task_num = pair["task_id"].split("/")[1]
+                    target_file = model_target_dir / f"Go_{task_num}.go"
 
-                prompt = (
-                    f"Translate the following Python function to Go.\n"
-                    f"Use this Go function signature:\n"
-                    f"```go\n{pair['declaration']}\n```\n\n"
-                    f"Python code:\n"
-                    f"```python\n{pair['py_solution']}\n```"
-                )
-
-                try:
-                    response = translator.run(prompt, stream=False)
-                    result = response.content
-
-                    if isinstance(result, TranslationResult):
-                        target_file.write_text(result.go_code, encoding="utf-8")
-                        records.append({
-                            "source": pair["task_id"],
-                            "target": str(target_file),
-                            "status": "ok",
-                        })
-                        progress.console.print(
-                            f"  [green]OK[/green] {pair['task_id']} -> {target_file.name}"
-                        )
-                    else:
-                        records.append({
-                            "source": pair["task_id"],
-                            "target": str(target_file),
-                            "status": "no structured output",
-                        })
-                        progress.console.print(
-                            f"  [yellow]WARN[/yellow] {pair['task_id']}: "
-                            f"unexpected response type ({type(result).__name__})"
-                        )
-                except Exception as e:
-                    records.append({
-                        "source": pair["task_id"],
-                        "target": str(target_file),
-                        "status": f"error: {e}",
-                    })
-                    progress.console.print(
-                        f"  [red]FAIL[/red] {pair['task_id']}: {e}"
+                    prompt = (
+                        f"Translate the following Python function to Go.\n"
+                        f"Use this Go function signature:\n"
+                        f"```go\n{pair['declaration']}\n```\n\n"
+                        f"Python code:\n"
+                        f"```python\n{pair['py_solution']}\n```"
                     )
 
-                progress.advance(task)
+                    try:
+                        response = translator.run(prompt, stream=False)
+                        result = response.content
+
+                        if isinstance(result, TranslationResult):
+                            target_file.write_text(result.go_code, encoding="utf-8")
+                            records.append({
+                                "source": pair["task_id"],
+                                "target": str(target_file),
+                                "status": "ok",
+                            })
+                            progress.console.print(
+                                f"  [green]OK[/green] {pair['task_id']} -> {target_file.name}"
+                            )
+                        else:
+                            records.append({
+                                "source": pair["task_id"],
+                                "target": str(target_file),
+                                "status": "no structured output",
+                            })
+                            progress.console.print(
+                                f"  [yellow]WARN[/yellow] {pair['task_id']}: "
+                                f"unexpected response type ({type(result).__name__})"
+                            )
+                    except Exception as e:
+                        records.append({
+                            "source": pair["task_id"],
+                            "target": str(target_file),
+                            "status": f"error: {e}",
+                        })
+                        progress.console.print(
+                            f"  [red]FAIL[/red] {pair['task_id']}: {e}"
+                        )
+
+                    progress.advance(task)
+            except KeyboardInterrupt:
+                interrupted = True
+
+        if interrupted:
+            console.print("\n[yellow]⚡ Interrupted. Partial results saved.[/yellow]")
 
         ok_count = sum(1 for r in records if r["status"] == "ok")
         console.print(
-            f"\n[bold]{label}:[/bold] {ok_count}/{len(pairs)} problems translated successfully."
+            f"\n[bold]{label}:[/bold] {ok_count}/{len(records)} problems translated successfully."
         )
 
 

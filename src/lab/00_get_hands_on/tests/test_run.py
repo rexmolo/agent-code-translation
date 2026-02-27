@@ -102,8 +102,7 @@ class TestEvaluateFile:
         record = _run.evaluate_file(py_file, go_file)
         assert record.compiles is True
         assert record.runs_successfully is True
-        assert record.io_equivalent is True
-        assert record.computational_accuracy is True
+        assert record.pass_at_1 is True
 
     def test_go_compile_failure(self, tmp_path):
         py_file = tmp_path / "bad.py"
@@ -124,8 +123,7 @@ class TestEvaluateFile:
         record = _run.evaluate_file(py_file, go_file)
         assert record.compiles is True
         assert record.runs_successfully is True
-        assert record.io_equivalent is False
-        assert record.computational_accuracy is False
+        assert record.pass_at_1 is False
 
     def test_missing_target(self, tmp_path):
         py_file = tmp_path / "src.py"
@@ -158,4 +156,4 @@ class TestEvaluateFile:
         assert record.compiles is True
         assert record.tests_total >= 1
         assert record.tests_passed >= 1
-        assert record.test_pass_rate == 1.0
+        assert record.tests_passed == record.tests_total

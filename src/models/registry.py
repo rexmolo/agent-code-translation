@@ -32,10 +32,10 @@ def _register_defaults() -> None:
             return MiniMax(id=model_id)
         return factory
 
-    def _gemini_factory(model_id: str) -> Callable:
+    def _gemini_factory(model_id: str, location: str | None = None) -> Callable:
         def factory():
             from agno.models.google import Gemini
-            return Gemini(id=model_id)
+            return Gemini(id=model_id, location=location)
         return factory
 
     _REGISTRY["gemini"] = {
@@ -65,12 +65,17 @@ def _register_defaults() -> None:
             "3_flash_preview": {
                 "model_id": "gemini-3-flash-preview",
                 "label": "Gemini 3 Flash Preview",
-                "factory": _gemini_factory("gemini-3-flash-preview"),
+                "factory": _gemini_factory("gemini-3-flash-preview", location="global"),
             },
             "3_pro_preview": {
                 "model_id": "gemini-3-pro-preview",
                 "label": "Gemini 3 Pro Preview",
-                "factory": _gemini_factory("gemini-3-pro-preview"),
+                "factory": _gemini_factory("gemini-3-pro-preview", location="global"),
+            },
+            "3.1_pro_preview": {
+                "model_id": "gemini-3.1-pro-preview",
+                "label": "Gemini 3.1 Pro Preview",
+                "factory": _gemini_factory("gemini-3.1-pro-preview", location="global"),
             },
         },
     }

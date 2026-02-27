@@ -31,15 +31,15 @@ class TestTranslationResult(BaseModel):
 
 
 class EvaluationRecord(BaseModel):
-    """Evaluation result for a single translated file."""
+    """Evaluation result for a single translated file/task."""
 
     source_file: str
     target_file: str
+    dataset: str = "local"
     compiles: bool = False
     runs_successfully: bool = False
-    io_equivalent: bool = False
-    computational_accuracy: bool = False
-    test_pass_rate: float = 0.0
+    pass_at_1: bool = False
+    ast_similarity: float = 0.0
     tests_total: int = 0
     tests_passed: int = 0
     notes: str = ""

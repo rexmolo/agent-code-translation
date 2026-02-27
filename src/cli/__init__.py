@@ -30,10 +30,17 @@ _style = Style([
     ("answer", "fg:green bold"),
 ])
 
+# Dataset choices
+_DATASETS = [
+    Choice(title="Local source code", value="local"),
+    Choice(title="HumanEval-X", value="humaneval-x"),
+]
+
 # Internal helpers to exclude when discovering actions from run.py
 _SKIP_FUNCTIONS = {
     "main", "discover_python_files", "find_test_file",
     "mirror_path", "evaluate_file", "preflight_check",
+    "load_humaneval_x",
 }
 
 
@@ -83,6 +90,36 @@ def _ask_or_abort(result):
     return result
 
 
+def _pick_eval_target(dataset: str) -> Path:
+    """Discover target folders (provider/variant) and let user pick one."""
+    target_root = TRANSLATION_TARGET_DIR / dataset
+    folders: list[tuple[str, Path]] = []
+
+    if target_root.is_dir():
+        for provider_dir in sorted(target_root.iterdir()):
+            if not provider_dir.is_dir() or provider_dir.name.startswith("."):
+                continue
+            for variant_dir in sorted(provider_dir.iterdir()):
+                if not variant_dir.is_dir() or variant_dir.name.startswith("."):
+                    continue
+                label = f"{provider_dir.name}/{variant_dir.name}"
+                folders.append((label, variant_dir))
+
+    if not folders:
+        console.print(f"[red]No translated output found under target/{dataset}/[/red]")
+        raise SystemExit(1)
+
+    choices = [Choice(title=label, value=path) for label, path in folders]
+
+    selected = _ask_or_abort(questionary.select(
+        "Select target to evaluate:",
+        choices=choices,
+        style=_style,
+    ).ask())
+
+    return selected
+
+
 def _interactive():
     """Interactive mode: arrow-key selection for experiment, action, models."""
     console.print(Panel(
@@ -102,7 +139,14 @@ def _interactive():
         style=_style,
     ).ask())
 
-    # Step 2: Discover and pick action from that experiment
+    # Step 2: Pick dataset
+    selected_dataset = _ask_or_abort(questionary.select(
+        "Select dataset:",
+        choices=_DATASETS,
+        style=_style,
+    ).ask())
+
+    # Step 3: Discover and pick action from that experiment
     run_mod = _load_experiment(experiment)
     actions = _discover_actions(run_mod)
     if not actions:
@@ -115,39 +159,51 @@ def _interactive():
         style=_style,
     ).ask())
 
-    # Step 3a: Pick provider
-    providers = list_providers()
-    provider_choices = [
-        Choice(title=f"{p['label']} ({p['key']})", value=p["key"])
-        for p in providers
-    ]
+    action_fn = getattr(run_mod, action)
+    sig = inspect.signature(action_fn)
+    kwargs: dict = {}
 
-    selected_provider = _ask_or_abort(questionary.select(
-        "Select provider:",
-        choices=provider_choices,
-        style=_style,
-    ).ask())
+    if "dataset" in sig.parameters:
+        kwargs["dataset"] = selected_dataset
 
-    # Step 3b: Pick model variant
-    variants = list_variants(selected_provider)
-    variant_choices = [
-        Choice(title=f"{v['label']} ({v['model_id']})", value=v["key"])
-        for v in variants
-    ]
+    if action == "evaluate":
+        # For evaluate: pick target folder directly instead of model
+        target_dir = _pick_eval_target(selected_dataset)
+        kwargs["eval_target_dir"] = target_dir
+        display_label = str(target_dir)
+    else:
+        # For translate and others: pick provider + variant
+        providers = list_providers()
+        provider_choices = [
+            Choice(title=f"{p['label']} ({p['key']})", value=p["key"])
+            for p in providers
+        ]
 
-    selected_variant = _ask_or_abort(questionary.select(
-        "Select model:",
-        choices=variant_choices,
-        style=_style,
-    ).ask())
+        selected_provider = _ask_or_abort(questionary.select(
+            "Select provider:",
+            choices=provider_choices,
+            style=_style,
+        ).ask())
 
-    enable_model(selected_provider, selected_variant)
+        variants = list_variants(selected_provider)
+        variant_choices = [
+            Choice(title=f"{v['label']} ({v['model_id']})", value=v["key"])
+            for v in variants
+        ]
 
-    # Step 4: Confirm
-    variant_label = next(v["label"] for v in variants if v["key"] == selected_variant)
+        selected_variant = _ask_or_abort(questionary.select(
+            "Select model:",
+            choices=variant_choices,
+            style=_style,
+        ).ask())
+
+        enable_model(selected_provider, selected_variant)
+        display_label = next(v["label"] for v in variants if v["key"] == selected_variant)
+
+    # Confirm
     console.print(
-        f"\n→ [cyan]{experiment}[/cyan] / [green]{action}[/green] "
-        f"with [green]{variant_label}[/green]\n"
+        f"\n→ [cyan]{experiment}[/cyan] / [magenta]{selected_dataset}[/magenta] "
+        f"/ [green]{action}[/green] with [green]{display_label}[/green]\n"
     )
 
     proceed = _ask_or_abort(questionary.select(
@@ -159,11 +215,6 @@ def _interactive():
     if proceed == "Cancel":
         console.print("Cancelled.")
         raise SystemExit(0)
-
-    # Step 5: Run the action
-    action_fn = getattr(run_mod, action)
-    sig = inspect.signature(action_fn)
-    kwargs: dict = {}
 
     if "skip_preflight" in sig.parameters:
         kwargs["skip_preflight"] = _ask_or_abort(
@@ -193,6 +244,11 @@ def cli(ctx):
     help="Experiment ID (folder name under src/lab/).",
 )
 @click.option(
+    "-d", "--dataset", type=click.Choice(["local", "humaneval-x"]),
+    default="local", show_default=True,
+    help="Dataset to use for translation.",
+)
+@click.option(
     "--source-dir", type=click.Path(exists=True, path_type=Path), default=None,
     help="Override source directory.",
 )
@@ -204,10 +260,10 @@ def cli(ctx):
     "--skip-preflight", is_flag=True, default=False,
     help="Skip API/environment checks.",
 )
-def translate(experiment, source_dir, target_dir, skip_preflight):
+def translate(experiment, dataset, source_dir, target_dir, skip_preflight):
     """Run translation for an experiment."""
     run_mod = _load_experiment(experiment)
-    kwargs = {"skip_preflight": skip_preflight}
+    kwargs = {"skip_preflight": skip_preflight, "dataset": dataset}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
@@ -221,19 +277,24 @@ def translate(experiment, source_dir, target_dir, skip_preflight):
     help="Experiment ID (folder name under src/lab/).",
 )
 @click.option(
+    "-d", "--dataset", type=click.Choice(["local", "humaneval-x"]),
+    default="local", show_default=True,
+    help="Dataset being evaluated.",
+)
+@click.option(
     "--source-dir", type=click.Path(exists=True, path_type=Path), default=None,
     help="Override source directory.",
 )
 @click.option(
     "--target-dir", type=click.Path(exists=True, path_type=Path), default=None,
-    help="Override target directory.",
+    help="Path to the specific translated output folder.",
 )
-def evaluate(experiment, source_dir, target_dir):
+def evaluate(experiment, dataset, source_dir, target_dir):
     """Evaluate existing translated files for an experiment."""
     run_mod = _load_experiment(experiment)
-    kwargs = {}
+    kwargs = {"dataset": dataset}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
-        kwargs["target_dir"] = target_dir
+        kwargs["eval_target_dir"] = target_dir
     run_mod.evaluate(**kwargs)

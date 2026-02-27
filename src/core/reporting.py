@@ -1,13 +1,11 @@
 """Aggregate metrics computation and Rich table display."""
 
-import importlib
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
-_models = importlib.import_module("src.lab.00_get_hands_on.models")
-EvaluationRecord = _models.EvaluationRecord
+from src.core.schemas import EvaluationRecord
 
 
 def compute_summary(records: list[EvaluationRecord]) -> dict:

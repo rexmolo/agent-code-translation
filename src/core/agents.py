@@ -1,12 +1,8 @@
 """Agent definitions for the translation pipeline."""
 
-import importlib
-
 from agno.agent import Agent
 
-_models = importlib.import_module("src.lab.00_get_hands_on.models")
-
-TranslationResult = _models.TranslationResult
+from src.core.schemas import TranslationResult
 
 TRANSLATION_INSTRUCTIONS = """\
 You are an expert code translator specializing in Python to Go translation.

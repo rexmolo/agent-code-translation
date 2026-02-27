@@ -4,7 +4,7 @@ Supports multiple providers, each with multiple model variants.
 See MODELS.md in this directory for the convention.
 
 Usage:
-    from src.models.registry import enable_model, get_enabled_models
+    from src.providers.registry import enable_model, get_enabled_models
 
     enable_model("gemini", "2.5_flash_lite")
 
@@ -28,7 +28,7 @@ def _register_defaults() -> None:
 
     def _minimax_factory(model_id: str) -> Callable:
         def factory():
-            from src.models.minimax import MiniMax
+            from src.providers.minimax import MiniMax
             return MiniMax(id=model_id)
         return factory
 

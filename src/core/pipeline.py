@@ -1,21 +1,12 @@
-"""Entry point: translate Python files to Go.
+"""Pipeline orchestration: translate and evaluate.
 
-Usage:
-    uv run python src/lab/00_get_hands_on/run.py [--source-dir PATH]
-    uv run python -m src.cli translate
-    uv run python -m src.cli evaluate
-
-Evaluation can be run separately after translation completes.
+High-level dispatch functions that coordinate the translation and
+evaluation workflows across datasets (local, HumanEval-X) and models.
 """
 
-import argparse
-import importlib
 import os
-import subprocess
-import tempfile
 from pathlib import Path
 
-from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress
 
@@ -25,194 +16,11 @@ from src.config import (
     LOCAL_TARGET_DIR,
     HUMANEVAL_X_TARGET_DIR,
 )
-from src.models.registry import get_enabled_models, get_model_env_var, get_model_vertex_env_vars
-
-_models = importlib.import_module("src.lab.00_get_hands_on.models")
-_metrics = importlib.import_module("src.lab.00_get_hands_on.metrics")
-_agents = importlib.import_module("src.lab.00_get_hands_on.agents")
-
-TranslationResult = _models.TranslationResult
-EvaluationRecord = _models.EvaluationRecord
-
-
-def discover_python_files(root: Path) -> list[Path]:
-    """Recursively find all .py files under a directory, excluding test files."""
-    return sorted(
-        f
-        for f in root.rglob("*.py")
-        if not f.name.startswith("test_") and not f.name.endswith("_test.py")
-    )
-
-
-def find_test_file(source_file: Path) -> Path | None:
-    """Find an existing Python test file for the given source file."""
-    parent = source_file.parent
-    stem = source_file.stem
-
-    candidates = [
-        parent / f"test_{source_file.name}",
-        parent / f"{stem}_test.py",
-        parent / "tests" / f"test_{source_file.name}",
-        parent / "tests" / f"{stem}_test.py",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def mirror_path(
-    source_file: Path, source_root: Path, target_root: Path, new_ext: str
-) -> Path:
-    """Compute the mirrored target path with a new extension."""
-    relative = source_file.relative_to(source_root)
-    return target_root / relative.with_suffix(new_ext)
-
-
-def evaluate_file(
-    source_file: Path,
-    target_file: Path,
-    go_test_code: str | None = None,
-    console: Console | None = None,
-) -> EvaluationRecord:
-    """Programmatically evaluate a translated Go file."""
-    record = EvaluationRecord(
-        source_file=str(source_file),
-        target_file=str(target_file),
-    )
-    log = console or Console()
-    filename = target_file.name
-
-    if not target_file.exists():
-        record.notes = "Target file not found"
-        log.print(f"  [red]SKIP[/red] {filename}: target file not found")
-        return record
-
-    go_code = target_file.read_text(encoding="utf-8")
-    python_code = source_file.read_text(encoding="utf-8")
-
-    # 1. Compilation check
-    log.print(f"  [dim]go build[/dim] {filename}...")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        go_file = Path(tmpdir) / "main.go"
-        go_file.write_text(go_code, encoding="utf-8")
-        try:
-            comp = subprocess.run(
-                ["go", "build", "-o", str(Path(tmpdir) / "main"), str(go_file)],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            record.compiles = comp.returncode == 0
-            if not record.compiles:
-                record.notes = comp.stderr.strip()[:200]
-                log.print(f"  [red]FAIL[/red] go build: {record.notes}")
-                return record
-            else:
-                log.print(f"  [green]OK[/green]   go build: compiled successfully")
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            record.notes = str(e)
-            log.print(f"  [red]FAIL[/red] go build: {e}")
-            return record
-
-    # 2. Run Go code
-    log.print(f"  [dim]go run[/dim]   {filename}...")
-    go_stdout = ""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        go_file = Path(tmpdir) / "main.go"
-        go_file.write_text(go_code, encoding="utf-8")
-        try:
-            go_run = subprocess.run(
-                ["go", "run", str(go_file)],
-                input="",
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            record.runs_successfully = go_run.returncode == 0
-            go_stdout = go_run.stdout
-            if not record.runs_successfully:
-                record.notes = go_run.stderr.strip()[:200]
-                log.print(f"  [red]FAIL[/red] go run: {record.notes}")
-            else:
-                log.print(f"  [green]OK[/green]   go run: exit 0")
-                if go_stdout.strip():
-                    log.print(f"  [dim]       stdout: {go_stdout.strip()[:100]}[/dim]")
-        except subprocess.TimeoutExpired:
-            record.notes = "Go execution timed out"
-            log.print(f"  [red]FAIL[/red] go run: timed out")
-            return record
-
-    # 3. Run Go tests if available (Pass@1: all tests must pass)
-    if go_test_code and record.compiles:
-        log.print(f"  [dim]go test[/dim]  {filename}...")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                ["go", "mod", "init", "testmod"],
-                capture_output=True,
-                text=True,
-                cwd=tmpdir,
-            )
-            go_file = Path(tmpdir) / "main.go"
-            go_file.write_text(go_code, encoding="utf-8")
-            test_file = Path(tmpdir) / "main_test.go"
-            test_file.write_text(go_test_code, encoding="utf-8")
-            try:
-                test_run = subprocess.run(
-                    ["go", "test", "-v", "./..."],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    cwd=tmpdir,
-                )
-                output = test_run.stdout + test_run.stderr
-                passed = output.count("--- PASS:")
-                failed = output.count("--- FAIL:")
-                total = passed + failed
-                record.tests_total = total
-                record.tests_passed = passed
-                record.pass_at_1 = (failed == 0 and total > 0)
-                if record.pass_at_1:
-                    log.print(f"  [green]OK[/green]   go test: {passed}/{total} passed (Pass@1: Y)")
-                else:
-                    log.print(f"  [red]FAIL[/red] go test: {passed}/{total} passed (Pass@1: N)")
-                    if output.strip():
-                        log.print(f"  [dim]{output[:300]}[/dim]")
-            except subprocess.TimeoutExpired:
-                record.notes += " | Go tests timed out"
-                log.print(f"  [red]FAIL[/red] go test: timed out")
-    elif not go_test_code and record.runs_successfully:
-        # Fallback: compare stdout if no test suite available
-        log.print(f"  [dim]python3[/dim]  {source_file.name}...")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            py_file = Path(tmpdir) / "main.py"
-            py_file.write_text(python_code, encoding="utf-8")
-            try:
-                py_run = subprocess.run(
-                    ["python3", str(py_file)],
-                    input="",
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if py_run.returncode == 0:
-                    outputs_match = py_run.stdout.strip() == go_stdout.strip()
-                    record.pass_at_1 = outputs_match
-                    if outputs_match:
-                        log.print(f"  [green]OK[/green]   output match: Go == Python")
-                    else:
-                        log.print(f"  [yellow]DIFF[/yellow] output mismatch:")
-                        log.print(f"         Python: {py_run.stdout.strip()[:80]}")
-                        log.print(f"         Go:     {go_stdout.strip()[:80]}")
-                else:
-                    record.notes = "Python source failed to run"
-                    log.print(f"  [red]FAIL[/red] python3: {py_run.stderr.strip()[:100]}")
-            except subprocess.TimeoutExpired:
-                record.notes = "Python execution timed out"
-                log.print(f"  [red]FAIL[/red] python3: timed out")
-
-    log.print()
-    return record
+from src.core import agents as _agents
+from src.core import reporting as _reporting
+from src.core.evaluation import discover_python_files, mirror_path, evaluate_file
+from src.core.schemas import TranslationResult, EvaluationRecord
+from src.providers.registry import get_enabled_models, get_model_env_var, get_model_vertex_env_vars
 
 
 def preflight_check(console: Console, enabled_models: list[tuple[str, str, object]]) -> bool:
@@ -386,7 +194,7 @@ def _translate_local(
                 interrupted = True
 
         if interrupted:
-            console.print("\n[yellow]⚡ Interrupted. Partial results saved.[/yellow]")
+            console.print("\n[yellow]Interrupted. Partial results saved.[/yellow]")
 
         ok_count = sum(1 for r in records if r["status"] == "ok")
         console.print(
@@ -492,7 +300,7 @@ def _translate_humaneval_x(
                 interrupted = True
 
         if interrupted:
-            console.print("\n[yellow]⚡ Interrupted. Partial results saved.[/yellow]")
+            console.print("\n[yellow]Interrupted. Partial results saved.[/yellow]")
 
         ok_count = sum(1 for r in records if r["status"] == "ok")
         console.print(
@@ -544,29 +352,24 @@ def _evaluate_local(
         record = evaluate_file(py_file, go_file, console=console)
         records.append(record)
 
-    _metrics.display_per_file_table(records)
-    summary = _metrics.compute_summary(records)
-    _metrics.display_summary_table(summary)
+    _reporting.display_per_file_table(records)
+    summary = _reporting.compute_summary(records)
+    _reporting.display_summary_table(summary)
 
 
 def _evaluate_humaneval_x(
     eval_target_dir: Path | None = None,
 ) -> None:
-    """Evaluate HumanEval-X translations using Docker.
-
-    For each Go_N.go file in eval_target_dir:
-    1. Merge translated code with HumanEval-X test harness
-    2. Run combined source in a Docker container (golang:1.23-alpine)
-    3. Report Compilation@1 and Pass@1
-    """
+    """Evaluate HumanEval-X translations using Docker."""
     from src.data.humaneval_x import load_humaneval_x
 
-    _docker_eval = importlib.import_module("src.lab.00_get_hands_on.docker_eval")
-    check_docker_available = _docker_eval.check_docker_available
-    ensure_go_image = _docker_eval.ensure_go_image
-    ensure_go_mod_cache = _docker_eval.ensure_go_mod_cache
-    evaluate_single_task = _docker_eval.evaluate_single_task
-    DEFAULT_GO_IMAGE = _docker_eval.DEFAULT_GO_IMAGE
+    from src.core.docker_eval import (
+        check_docker_available,
+        ensure_go_image,
+        ensure_go_mod_cache,
+        evaluate_single_task,
+        DEFAULT_GO_IMAGE,
+    )
 
     console = Console()
 
@@ -616,7 +419,6 @@ def _evaluate_humaneval_x(
         task = progress.add_task("Evaluating...", total=len(go_files))
 
         for go_file in go_files:
-            # Extract task number from filename: Go_42.go -> "42"
             match = go_file.stem.replace("Go_", "")
             task_num = match
 
@@ -647,40 +449,6 @@ def _evaluate_humaneval_x(
             records.append(record)
             progress.advance(task)
 
-    _metrics.display_per_file_table(records)
-    summary = _metrics.compute_summary(records)
-    _metrics.display_summary_table(summary)
-
-
-def main():
-    load_dotenv()
-
-    parser = argparse.ArgumentParser(description="Translate Python to Go")
-    parser.add_argument(
-        "--source-dir",
-        type=Path,
-        default=TRANSLATION_SOURCE_DIR,
-        help="Directory containing Python source files",
-    )
-    parser.add_argument(
-        "--target-dir",
-        type=Path,
-        default=TRANSLATION_TARGET_DIR,
-        help="Directory for translated Go files",
-    )
-    parser.add_argument(
-        "--skip-preflight",
-        action="store_true",
-        help="Skip preflight checks (API connection test)",
-    )
-    args = parser.parse_args()
-
-    translate(
-        source_dir=args.source_dir,
-        target_dir=args.target_dir,
-        skip_preflight=args.skip_preflight,
-    )
-
-
-if __name__ == "__main__":
-    main()
+    _reporting.display_per_file_table(records)
+    summary = _reporting.compute_summary(records)
+    _reporting.display_summary_table(summary)

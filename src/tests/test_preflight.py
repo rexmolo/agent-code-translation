@@ -2,10 +2,9 @@
 
 Run these first. If any fail, the pipeline cannot work.
 
-    uv run pytest src/lab/00_get_hands_on/tests/test_preflight.py -v
+    uv run pytest src/tests/test_preflight.py -v
 """
 
-import importlib
 import os
 import subprocess
 
@@ -14,7 +13,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_agents = importlib.import_module("src.lab.00_get_hands_on.agents")
+from src.core.agents import create_translation_agent
+from src.providers.minimax import MiniMax
 
 
 class TestEnvironment:
@@ -43,7 +43,8 @@ class TestAPIConnection:
 
     def test_minimax_api_responds(self):
         """Send a minimal prompt and verify we get a non-empty response."""
-        agent = _agents.create_translation_agent()
+        model = MiniMax(id="MiniMax-M2.5")
+        agent = create_translation_agent(model)
         response = agent.run("Translate to Go: print('hello')", stream=False)
         assert response is not None, "Agent returned None"
         assert response.content is not None, "Response content is None"

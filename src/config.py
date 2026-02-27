@@ -12,7 +12,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # --- Source directories ---
 SCRIPTS_DIR = REPO_ROOT / "src" / "scripts"
-LAB_DIR = REPO_ROOT / "src" / "lab"
 TEMP_DIR = REPO_ROOT / "src" / "temp"
 
 # --- Data directories ---

@@ -1,18 +1,15 @@
-"""Tests for run.py helper functions (no LLM calls).
+"""Tests for evaluation.py helper functions (no LLM calls).
 
-    uv run pytest src/lab/00_get_hands_on/tests/test_run.py -v
+    uv run pytest src/tests/test_run.py -v
 """
 
-import importlib
 import tempfile
 from pathlib import Path
 
 import pytest
 
-_run = importlib.import_module("src.lab.00_get_hands_on.run")
-_models = importlib.import_module("src.lab.00_get_hands_on.models")
-
-EvaluationRecord = _models.EvaluationRecord
+from src.core.evaluation import discover_python_files, find_test_file, mirror_path, evaluate_file
+from src.core.schemas import EvaluationRecord
 
 
 class TestDiscoverPythonFiles:
@@ -20,7 +17,7 @@ class TestDiscoverPythonFiles:
         (tmp_path / "a.py").write_text("pass")
         (tmp_path / "b.py").write_text("pass")
         (tmp_path / "c.txt").write_text("not python")
-        files = _run.discover_python_files(tmp_path)
+        files = discover_python_files(tmp_path)
         assert len(files) == 2
         assert all(f.suffix == ".py" for f in files)
 
@@ -28,7 +25,7 @@ class TestDiscoverPythonFiles:
         (tmp_path / "app.py").write_text("pass")
         (tmp_path / "test_app.py").write_text("pass")
         (tmp_path / "app_test.py").write_text("pass")
-        files = _run.discover_python_files(tmp_path)
+        files = discover_python_files(tmp_path)
         assert len(files) == 1
         assert files[0].name == "app.py"
 
@@ -37,11 +34,11 @@ class TestDiscoverPythonFiles:
         sub.mkdir()
         (tmp_path / "a.py").write_text("pass")
         (sub / "b.py").write_text("pass")
-        files = _run.discover_python_files(tmp_path)
+        files = discover_python_files(tmp_path)
         assert len(files) == 2
 
     def test_empty_dir(self, tmp_path):
-        files = _run.discover_python_files(tmp_path)
+        files = discover_python_files(tmp_path)
         assert files == []
 
 
@@ -51,14 +48,14 @@ class TestFindTestFile:
         src.write_text("pass")
         test = tmp_path / "test_app.py"
         test.write_text("pass")
-        assert _run.find_test_file(src) == test
+        assert find_test_file(src) == test
 
     def test_finds_test_suffix(self, tmp_path):
         src = tmp_path / "app.py"
         src.write_text("pass")
         test = tmp_path / "app_test.py"
         test.write_text("pass")
-        assert _run.find_test_file(src) == test
+        assert find_test_file(src) == test
 
     def test_finds_in_tests_subdir(self, tmp_path):
         src = tmp_path / "app.py"
@@ -67,12 +64,12 @@ class TestFindTestFile:
         tests_dir.mkdir()
         test = tests_dir / "test_app.py"
         test.write_text("pass")
-        assert _run.find_test_file(src) == test
+        assert find_test_file(src) == test
 
     def test_returns_none_when_no_tests(self, tmp_path):
         src = tmp_path / "app.py"
         src.write_text("pass")
-        assert _run.find_test_file(src) is None
+        assert find_test_file(src) is None
 
 
 class TestMirrorPath:
@@ -80,14 +77,14 @@ class TestMirrorPath:
         source_root = tmp_path / "src"
         target_root = tmp_path / "target"
         source_file = source_root / "app.py"
-        result = _run.mirror_path(source_file, source_root, target_root, ".go")
+        result = mirror_path(source_file, source_root, target_root, ".go")
         assert result == target_root / "app.go"
 
     def test_nested_mirror(self, tmp_path):
         source_root = tmp_path / "src"
         target_root = tmp_path / "target"
         source_file = source_root / "pkg" / "util.py"
-        result = _run.mirror_path(source_file, source_root, target_root, ".go")
+        result = mirror_path(source_file, source_root, target_root, ".go")
         assert result == target_root / "pkg" / "util.go"
 
 
@@ -99,7 +96,7 @@ class TestEvaluateFile:
         go_file.write_text(
             'package main\nimport "fmt"\nfunc main() { fmt.Println("hello world") }\n'
         )
-        record = _run.evaluate_file(py_file, go_file)
+        record = evaluate_file(py_file, go_file)
         assert record.compiles is True
         assert record.runs_successfully is True
         assert record.pass_at_1 is True
@@ -109,7 +106,7 @@ class TestEvaluateFile:
         py_file.write_text("print('hi')")
         go_file = tmp_path / "bad.go"
         go_file.write_text("not valid go")
-        record = _run.evaluate_file(py_file, go_file)
+        record = evaluate_file(py_file, go_file)
         assert record.compiles is False
         assert record.runs_successfully is False
 
@@ -120,7 +117,7 @@ class TestEvaluateFile:
         go_file.write_text(
             'package main\nimport "fmt"\nfunc main() { fmt.Println("golang") }\n'
         )
-        record = _run.evaluate_file(py_file, go_file)
+        record = evaluate_file(py_file, go_file)
         assert record.compiles is True
         assert record.runs_successfully is True
         assert record.pass_at_1 is False
@@ -129,7 +126,7 @@ class TestEvaluateFile:
         py_file = tmp_path / "src.py"
         py_file.write_text("pass")
         go_file = tmp_path / "missing.go"
-        record = _run.evaluate_file(py_file, go_file)
+        record = evaluate_file(py_file, go_file)
         assert record.compiles is False
         assert "not found" in record.notes
 
@@ -152,7 +149,7 @@ class TestEvaluateFile:
             "  }\n"
             "}\n"
         )
-        record = _run.evaluate_file(py_file, go_file, go_test_code=go_test)
+        record = evaluate_file(py_file, go_file, go_test_code=go_test)
         assert record.compiles is True
         assert record.tests_total >= 1
         assert record.tests_passed >= 1

@@ -15,6 +15,8 @@ from pathlib import Path
 
 from rich.console import Console
 
+from src.core.schemas import EvaluationRecord
+
 DEFAULT_GO_IMAGE = "golang:1.26-alpine"
 DEFAULT_TIMEOUT = 60
 
@@ -401,13 +403,8 @@ def evaluate_single_task(
     test_code: str,
     image: str = DEFAULT_GO_IMAGE,
     timeout: int = DEFAULT_TIMEOUT,
-) -> "EvaluationRecord":
+) -> EvaluationRecord:
     """Evaluate a single HumanEval-X task: build Go files, run in Docker."""
-    import importlib
-
-    _models = importlib.import_module("src.lab.00_get_hands_on.models")
-    EvaluationRecord = _models.EvaluationRecord
-
     task_num = task_id.split("/")[1] if "/" in task_id else task_id
 
     record = EvaluationRecord(

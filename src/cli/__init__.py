@@ -2,11 +2,10 @@
 
 Usage:
     uv run python -m src.cli                          # interactive mode
-    uv run python -m src.cli translate [-e EXPERIMENT] [--skip-preflight]
-    uv run python -m src.cli evaluate [-e EXPERIMENT]
+    uv run python -m src.cli translate [--skip-preflight]
+    uv run python -m src.cli evaluate
 """
 
-import importlib
 import inspect
 from pathlib import Path
 
@@ -17,8 +16,9 @@ from questionary import Choice, Style
 from rich.console import Console
 from rich.panel import Panel
 
-from src.config import LAB_DIR, TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
-from src.models.registry import enable_model, list_providers, list_variants
+from src.config import TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
+from src.core import pipeline as _pipeline
+from src.providers.registry import enable_model, list_providers, list_variants
 
 console = Console()
 
@@ -53,8 +53,8 @@ def _dataset_size(dataset: str) -> int | None:
             from src.data.humaneval_x import load_humaneval_x
             return len(load_humaneval_x())
         elif dataset == "local":
-            _run_mod = importlib.import_module("src.lab.00_get_hands_on.run")
-            return len(_run_mod.discover_python_files(TRANSLATION_SOURCE_DIR))
+            from src.core.evaluation import discover_python_files
+            return len(discover_python_files(TRANSLATION_SOURCE_DIR))
     except Exception:
         pass
     return None
@@ -74,41 +74,20 @@ def _sample_choices(dataset: str) -> list[Choice]:
     return choices
 
 
-def _load_experiment(experiment: str):
-    """Dynamically import an experiment's run module."""
-    module_path = f"src.lab.{experiment}.run"
-    try:
-        return importlib.import_module(module_path)
-    except ModuleNotFoundError as e:
-        raise click.ClickException(
-            f"Experiment '{experiment}' not found (tried {module_path}): {e}"
-        )
-
-
-def _discover_experiments() -> list[str]:
-    """Return sorted list of experiment folder names under src/lab/."""
-    if not LAB_DIR.is_dir():
-        return []
-    return sorted(
-        d.name for d in LAB_DIR.iterdir()
-        if d.is_dir() and not d.name.startswith("__")
-    )
-
-
-def _discover_actions(run_mod) -> list[str]:
-    """Discover available actions from an experiment's run module.
+def _discover_actions() -> list[str]:
+    """Discover available actions from the core run module.
 
     If the module defines ACTIONS, use that. Otherwise introspect public functions.
     """
-    if hasattr(run_mod, "ACTIONS"):
-        return list(run_mod.ACTIONS)
+    if hasattr(_pipeline, "ACTIONS"):
+        return list(_pipeline.ACTIONS)
 
     return [
         name
-        for name, obj in inspect.getmembers(run_mod, inspect.isfunction)
+        for name, obj in inspect.getmembers(_pipeline, inspect.isfunction)
         if not name.startswith("_")
         and name not in _SKIP_FUNCTIONS
-        and obj.__module__ == run_mod.__name__
+        and obj.__module__ == _pipeline.__name__
     ]
 
 
@@ -151,36 +130,23 @@ def _pick_eval_target(dataset: str) -> Path:
 
 
 def _interactive():
-    """Interactive mode: arrow-key selection for experiment, action, models."""
+    """Interactive mode: arrow-key selection for action, dataset, models."""
     console.print(Panel(
         "[bold]Thesis Experiment CLI[/bold]\nPython → Go Translation & Evaluation",
         border_style="blue",
     ))
 
-    # Step 1: Pick experiment
-    experiments = _discover_experiments()
-    if not experiments:
-        console.print("[red]No experiments found under src/lab/[/red]")
-        raise SystemExit(1)
-
-    experiment = _ask_or_abort(questionary.select(
-        "Select experiment:",
-        choices=experiments,
-        style=_style,
-    ).ask())
-
-    # Step 2: Pick dataset
+    # Step 1: Pick dataset
     selected_dataset = _ask_or_abort(questionary.select(
         "Select dataset:",
         choices=_DATASETS,
         style=_style,
     ).ask())
 
-    # Step 3: Discover and pick action from that experiment
-    run_mod = _load_experiment(experiment)
-    actions = _discover_actions(run_mod)
+    # Step 2: Discover and pick action
+    actions = _discover_actions()
     if not actions:
-        console.print(f"[red]No actions found in {experiment}/run.py[/red]")
+        console.print("[red]No actions found in core/pipeline.py[/red]")
         raise SystemExit(1)
 
     action = _ask_or_abort(questionary.select(
@@ -189,14 +155,14 @@ def _interactive():
         style=_style,
     ).ask())
 
-    action_fn = getattr(run_mod, action)
+    action_fn = getattr(_pipeline, action)
     sig = inspect.signature(action_fn)
     kwargs: dict = {}
 
     if "dataset" in sig.parameters:
         kwargs["dataset"] = selected_dataset
 
-    # Step 4: Sample size (only for translate-like actions that have a 'sample' param)
+    # Step 3: Sample size (only for translate-like actions that have a 'sample' param)
     if action != "evaluate":
         sample_choices = _sample_choices(selected_dataset)
         selected_sample = _ask_or_abort(questionary.select(
@@ -244,7 +210,7 @@ def _interactive():
 
     # Confirm
     console.print(
-        f"\n→ [cyan]{experiment}[/cyan] / [magenta]{selected_dataset}[/magenta] "
+        f"\n→ [magenta]{selected_dataset}[/magenta] "
         f"/ [green]{action}[/green] with [green]{display_label}[/green]\n"
     )
 
@@ -282,10 +248,6 @@ def cli(ctx):
 
 @cli.command()
 @click.option(
-    "-e", "--experiment", default="00_get_hands_on", show_default=True,
-    help="Experiment ID (folder name under src/lab/).",
-)
-@click.option(
     "-d", "--dataset", type=click.Choice(["local", "humaneval-x"]),
     default="local", show_default=True,
     help="Dataset to use for translation.",
@@ -302,22 +264,17 @@ def cli(ctx):
     "--skip-preflight", is_flag=True, default=False,
     help="Skip API/environment checks.",
 )
-def translate(experiment, dataset, source_dir, target_dir, skip_preflight):
-    """Run translation for an experiment."""
-    run_mod = _load_experiment(experiment)
+def translate(dataset, source_dir, target_dir, skip_preflight):
+    """Run translation pipeline."""
     kwargs = {"skip_preflight": skip_preflight, "dataset": dataset}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
         kwargs["target_dir"] = target_dir
-    run_mod.translate(**kwargs)
+    _pipeline.translate(**kwargs)
 
 
 @cli.command()
-@click.option(
-    "-e", "--experiment", default="00_get_hands_on", show_default=True,
-    help="Experiment ID (folder name under src/lab/).",
-)
 @click.option(
     "-d", "--dataset", type=click.Choice(["local", "humaneval-x"]),
     default="local", show_default=True,
@@ -331,12 +288,11 @@ def translate(experiment, dataset, source_dir, target_dir, skip_preflight):
     "--target-dir", type=click.Path(exists=True, path_type=Path), default=None,
     help="Path to the specific translated output folder.",
 )
-def evaluate(experiment, dataset, source_dir, target_dir):
-    """Evaluate existing translated files for an experiment."""
-    run_mod = _load_experiment(experiment)
+def evaluate(dataset, source_dir, target_dir):
+    """Evaluate existing translated files."""
     kwargs = {"dataset": dataset}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
         kwargs["eval_target_dir"] = target_dir
-    run_mod.evaluate(**kwargs)
+    _pipeline.evaluate(**kwargs)

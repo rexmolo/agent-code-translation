@@ -422,7 +422,7 @@ def evaluate_single_task(
     )
 
     record.compiles = docker_result.compiles
-    record.runs_successfully = docker_result.compiles  # compiled = ran
+    record.runs_successfully = docker_result.compiles and not docker_result.timed_out
     record.pass_at_1 = docker_result.passes
 
     if docker_result.timed_out:

@@ -50,4 +50,4 @@ data/
 src/temp/
 .env
 .env.example
-.spec
+.doc

@@ -30,10 +30,11 @@ cp .env.example .env   # then fill in your API keys
 
 Required environment variables (depending on provider):
 
-| Variable | Provider |
-|---|---|
-| `MINIMAX_API_KEY` | MiniMax |
-| `GOOGLE_API_KEY` | Google Gemini |
+| Variable | Provider | Required |
+|---|---|---|
+| `MINIMAX_API_KEY` | MiniMax | For MiniMax models |
+| `GOOGLE_API_KEY` | Google Gemini | For Gemini models |
+| `OPENAI_API_KEY` | OpenAI | Only if using OpenAI embeddings for RAG (optional) |
 
 ## Usage
 
@@ -71,6 +72,91 @@ uv run pytest src/tests/test_run.py -v
 uv run pytest src/tests/ -v -m "not integration"
 ```
 
+## RAG (Retrieval-Augmented Generation)
+
+The system uses RAG to provide the LLM with relevant context before translation: similar code examples, Python-to-Go API mappings, Go documentation, and error handling patterns.
+
+### RAG Data Sources
+
+| Collection | Entries | Description |
+|---|---|---|
+| `parallel_corpus` | 1,668 | Python-Go code pairs from IBM CodeNet (few-shot examples) |
+| `api_mappings` | 180 | Python → Go API equivalences (e.g., `json.loads()` → `json.Unmarshal()`) |
+| `go_docs` | 157 | Go standard library docs + error handling & API sequence patterns |
+
+### RAG Pipeline
+
+```
+Python code
+  → tree-sitter extracts API calls + detects try/except
+  → query api_mappings with extracted API names
+  → query go_docs with matched Go APIs + error patterns
+  → query parallel_corpus for similar full examples
+  → formatted context → LLM prompt
+```
+
+Retrieval uses **Hybrid Search**: BM25 (exact keyword matching, good for API names) + Dense embeddings (semantic similarity), merged with Reciprocal Rank Fusion.
+
+### Setup & Configuration
+
+The embedding model is configured in `src/rag/rag_config.yaml`:
+
+```yaml
+embedding:
+  provider: "default"   # "default" (free, local) or "openai" (requires API key)
+```
+
+**Option 1: Free local embeddings (default, no API key needed)**
+
+Uses ChromaDB's built-in `all-MiniLM-L6-v2` model (384 dims, runs via ONNX locally). Good for testing the pipeline.
+
+```bash
+# Ingest all data into ChromaDB (uses free local model)
+uv run python src/scripts/ingest_rag.py
+```
+
+**Option 2: OpenAI embeddings (higher quality)**
+
+Uses `text-embedding-3-large` (3072 dims). Better retrieval quality for code.
+
+```bash
+# 1. Set your API key in .env
+#    OPENAI_API_KEY=sk-...
+
+# 2. Switch provider in src/rag/rag_config.yaml
+#    provider: "openai"
+
+# 3. Clear old embeddings (different dimensions) and re-ingest
+rm -rf data/RAG/chromadb/
+uv run python src/scripts/ingest_rag.py
+```
+
+### Ingest Options
+
+```bash
+# Ingest all collections
+uv run python src/scripts/ingest_rag.py
+
+# Ingest a specific collection
+uv run python src/scripts/ingest_rag.py --collection parallel_corpus
+uv run python src/scripts/ingest_rag.py --collection api_mappings
+uv run python src/scripts/ingest_rag.py --collection go_docs
+```
+
+### Expanding RAG Data
+
+```bash
+# Generate additional Python→Go API mappings (curated, appends to api_mappings.jsonl)
+uv run python src/scripts/generate_api_mappings.py
+
+# Generate additional Go standard library docs (curated, appends to go_docs.jsonl)
+uv run python src/scripts/generate_go_docs.py
+
+# After expanding data, re-ingest the affected collection(s)
+uv run python src/scripts/ingest_rag.py --collection api_mappings
+uv run python src/scripts/ingest_rag.py --collection go_docs
+```
+
 ## Project Structure
 
 ```
@@ -92,15 +178,26 @@ src/
 ├── providers/            # LLM provider adapters
 │   ├── minimax/          # MiniMax (Anthropic-compatible API)
 │   └── registry.py       # Multi-provider model registry with lazy factories
+├── rag/                  # RAG retrieval system
+│   ├── api_extractor.py  # Tree-sitter Python API/call extraction
+│   ├── embeddings.py     # Embedding function factory (reads rag_config.yaml)
+│   ├── rag_config.yaml   # Embedding provider & retrieval settings
+│   ├── retriever.py      # Hybrid retrieval (BM25 + dense + RRF)
+│   └── store.py          # ChromaDB client & collection management
 ├── scripts/              # One-off data processing scripts
+│   ├── extract_codenet_data.py    # Extract CodeNet parallel corpus
+│   ├── generate_api_mappings.py   # Generate Python→Go API mappings
+│   ├── generate_go_docs.py        # Generate Go std library docs
+│   └── ingest_rag.py             # Ingest JSONL data into ChromaDB
 └── tests/                # All tests (64 test cases)
-    ├── test_docker_eval.py   # Docker evaluation & Go file building
-    ├── test_metrics.py       # Summary computation & display tables
-    ├── test_preflight.py     # Environment & API connection checks
-    ├── test_run.py           # File discovery, mirroring, local evaluation
-    └── test_tools.py         # Compile, run, compare tool functions
 
 data/
+├── RAG/
+│   ├── processed/                 # JSONL data for RAG
+│   │   ├── api_mappings.jsonl     # Python→Go API mappings (180 entries)
+│   │   ├── go_docs.jsonl          # Go docs + patterns (157 entries)
+│   │   └── parallel_corpus/       # CodeNet Python-Go pairs (1,668 entries)
+│   └── chromadb/                  # ChromaDB persistent storage (gitignored)
 └── translation/
     ├── source/           # Python source files (local dataset)
     └── target/           # Translated Go output (provider/variant subdirs)

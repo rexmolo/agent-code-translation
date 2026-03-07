@@ -1,0 +1,27 @@
+# RAG Configuration
+# Switch embedding provider to test the pipeline without an API key.
+# After verifying the pipeline works, change to "openai" for production quality.
+
+embedding:
+  # Provider: "default" (free, local) or "openai" (requires OPENAI_API_KEY)
+  provider: "default"
+
+  # Provider-specific settings
+  default:
+    # ChromaDB's built-in ONNX model (all-MiniLM-L6-v2), no API key needed.
+    # Dimension: 384. Good enough for pipeline testing.
+    model: "all-MiniLM-L6-v2"
+
+  openai:
+    # Requires OPENAI_API_KEY in .env
+    model: "text-embedding-3-large"
+    # Alternatives: "text-embedding-3-small" (cheaper, 1536 dims)
+
+retrieval:
+  # Number of results to return per collection
+  parallel_corpus_k: 3
+  api_mappings_k: 5
+  go_docs_k: 3
+
+  # Reciprocal Rank Fusion constant (higher = more uniform weighting)
+  rrf_k: 60

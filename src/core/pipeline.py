@@ -23,6 +23,15 @@ from src.core.schemas import TranslationResult, EvaluationRecord
 from src.providers.registry import get_enabled_models, get_model_env_var, get_model_vertex_env_vars
 
 
+def _get_rag_context(python_code: str) -> str:
+    """Retrieve RAG context, returning empty string if unavailable."""
+    try:
+        from src.rag.retriever import build_translation_context
+        return build_translation_context(python_code)
+    except Exception:
+        return ""
+
+
 def preflight_check(console: Console, enabled_models: list[tuple[str, str, object]]) -> bool:
     """Verify environment before running the pipeline. Returns True if all checks pass."""
     import shutil
@@ -152,7 +161,10 @@ def _translate_local(
                     target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
                     target_file.parent.mkdir(parents=True, exist_ok=True)
 
+                    rag_context = _get_rag_context(python_code)
                     prompt = (
+                        f"{rag_context}\n\n" if rag_context else ""
+                    ) + (
                         f"Translate the following Python code to Go:\n\n"
                         f"```python\n{python_code}\n```"
                     )
@@ -253,7 +265,10 @@ def _translate_humaneval_x(
                     task_num = pair["task_id"].split("/")[1]
                     target_file = model_target_dir / f"Go_{task_num}.go"
 
+                    rag_context = _get_rag_context(pair["py_solution"])
                     prompt = (
+                        f"{rag_context}\n\n" if rag_context else ""
+                    ) + (
                         f"Translate the following Python function to Go.\n"
                         f"Use this Go function signature:\n"
                         f"```go\n{pair['declaration']}\n```\n\n"

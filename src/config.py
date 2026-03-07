@@ -20,4 +20,10 @@ TRANSLATION_SOURCE_DIR = DATA_DIR / "translation" / "source"
 TRANSLATION_TARGET_DIR = DATA_DIR / "translation" / "target"
 LOCAL_TARGET_DIR = TRANSLATION_TARGET_DIR / "local"
 HUMANEVAL_X_TARGET_DIR = TRANSLATION_TARGET_DIR / "humaneval-x"
-RAG_PROCESSED_DIR = REPO_ROOT / "src" / "data" / "RAG" / "processed"
+RAG_PROCESSED_DIR = DATA_DIR / "RAG" / "processed"
+
+# --- ChromaDB / RAG ---
+CHROMA_PERSIST_DIR = DATA_DIR / "RAG" / "chromadb"
+PARALLEL_CORPUS_FILE = RAG_PROCESSED_DIR / "parallel_corpus" / "codeNet" / "python_go_pairs.jsonl"
+API_MAPPINGS_FILE = RAG_PROCESSED_DIR / "api_mappings.jsonl"
+GO_DOCS_FILE = RAG_PROCESSED_DIR / "go_docs.jsonl"

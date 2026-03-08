@@ -99,12 +99,13 @@ def translate(
     skip_preflight: bool = False,
     dataset: str = "local",
     sample: int | None = None,
+    experiment: str = "baseline",
 ) -> None:
     """Dispatch translation to the appropriate pipeline based on dataset."""
     if dataset == "local":
-        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample)
+        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment)
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample)
+        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -114,10 +115,11 @@ def _translate_local(
     target_dir: Path,
     skip_preflight: bool = False,
     sample: int | None = None,
+    experiment: str = "baseline",
 ) -> None:
     """Translate local Python files to Go.
 
-    Output: target/local/<provider>/<variant>/<mirrored_source>.go
+    Output: target/local/<provider>/<variant>/<experiment>/<mirrored_source>.go
     """
     console = Console()
 
@@ -143,9 +145,10 @@ def _translate_local(
     )
 
     for provider_key, variant_key, model in enabled:
-        model_target_dir = target_dir / provider_key / variant_key
+        model_target_dir = target_dir / provider_key / variant_key / experiment
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
+        console.print(f"   Experiment: {experiment}")
         console.print(f"   Output: {model_target_dir}\n")
 
         translator = _agents.create_translation_agent(model)
@@ -218,10 +221,11 @@ def _translate_humaneval_x(
     target_dir: Path,
     skip_preflight: bool = False,
     sample: int | None = None,
+    experiment: str = "baseline",
 ) -> None:
     """Translate HumanEval-X Python problems to Go.
 
-    Output: target/humaneval-x/<provider>/<variant>/Go_<N>.go
+    Output: target/humaneval-x/<provider>/<variant>/<experiment>/Go_<N>.go
     """
     from src.data.humaneval_x import load_humaneval_x
 
@@ -247,10 +251,11 @@ def _translate_humaneval_x(
         console.print()
 
     for provider_key, variant_key, model in enabled:
-        model_target_dir = target_dir / provider_key / variant_key
+        model_target_dir = target_dir / provider_key / variant_key / experiment
         model_target_dir.mkdir(parents=True, exist_ok=True)
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
+        console.print(f"   Experiment: {experiment}")
         console.print(f"   Output: {model_target_dir}\n")
 
         translator = _agents.create_translation_agent(model)

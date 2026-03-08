@@ -100,7 +100,7 @@ def _ask_or_abort(result):
 
 
 def _pick_eval_target(dataset: str) -> Path:
-    """Discover target folders (provider/variant) and let user pick one."""
+    """Discover target folders (provider/variant/experiment) and let user pick one."""
     target_root = TRANSLATION_TARGET_DIR / dataset
     folders: list[tuple[str, Path]] = []
 
@@ -111,8 +111,11 @@ def _pick_eval_target(dataset: str) -> Path:
             for variant_dir in sorted(provider_dir.iterdir()):
                 if not variant_dir.is_dir() or variant_dir.name.startswith("."):
                     continue
-                label = f"{provider_dir.name}/{variant_dir.name}"
-                folders.append((label, variant_dir))
+                for experiment_dir in sorted(variant_dir.iterdir()):
+                    if not experiment_dir.is_dir() or experiment_dir.name.startswith("."):
+                        continue
+                    label = f"{provider_dir.name}/{variant_dir.name}/{experiment_dir.name}"
+                    folders.append((label, experiment_dir))
 
     if not folders:
         console.print(f"[red]No translated output found under target/{dataset}/[/red]")
@@ -208,6 +211,15 @@ def _interactive():
         enable_model(selected_provider, selected_variant)
         display_label = next(v["label"] for v in variants if v["key"] == selected_variant)
 
+        # Step: Experiment name
+        if "experiment" in sig.parameters:
+            experiment_name = _ask_or_abort(questionary.text(
+                "Experiment name:",
+                default="baseline",
+                style=_style,
+            ).ask())
+            kwargs["experiment"] = experiment_name
+
     # Confirm
     console.print(
         f"\n→ [magenta]{selected_dataset}[/magenta] "
@@ -264,13 +276,33 @@ def cli(ctx):
     "--skip-preflight", is_flag=True, default=False,
     help="Skip API/environment checks.",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight):
+@click.option(
+    "-e", "--experiment", type=str, default="baseline", show_default=True,
+    help="Experiment subfolder name (e.g. baseline, rag).",
+)
+@click.option(
+    "-p", "--provider", type=str, default=None,
+    help="Provider key (e.g. minimax, gemini).",
+)
+@click.option(
+    "-v", "--variant", type=str, default=None,
+    help="Model variant key (e.g. M2.5, 2.5_pro).",
+)
+@click.option(
+    "-n", "--sample", type=int, default=None,
+    help="Translate only the first N items.",
+)
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample):
     """Run translation pipeline."""
-    kwargs = {"skip_preflight": skip_preflight, "dataset": dataset}
+    if provider and variant:
+        enable_model(provider, variant)
+    kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
         kwargs["target_dir"] = target_dir
+    if sample is not None:
+        kwargs["sample"] = sample
     _pipeline.translate(**kwargs)
 
 

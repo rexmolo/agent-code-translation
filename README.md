@@ -50,15 +50,29 @@ Walks through dataset selection, action, sample size, and model choice with arro
 ### Subcommand mode
 
 ```bash
-# Translate with defaults
+# Translate with defaults (baseline experiment)
 uv run python -m src.cli translate
 
-# Translate HumanEval-X dataset, skip preflight
-uv run python -m src.cli translate -d humaneval-x --skip-preflight
+# Translate HumanEval-X with a specific provider/model and experiment name
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag -n 10 --skip-preflight
+
+# Translate first 10 items only
+uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -n 10
 
 # Evaluate existing translations
-uv run python -m src.cli evaluate -d humaneval-x --target-dir data/translation/target/humaneval-x/gemini/2.5_flash
+uv run python -m src.cli evaluate -d humaneval-x --target-dir data/translation/target/humaneval-x/gemini/2.5_pro/baseline
 ```
+
+Subcommand options for `translate`:
+
+| Option | Description |
+|---|---|
+| `-d`, `--dataset` | Dataset: `local` or `humaneval-x` (default: `local`) |
+| `-p`, `--provider` | Provider key (e.g. `minimax`, `gemini`) |
+| `-v`, `--variant` | Model variant key (e.g. `M2.5`, `2.5_pro`) |
+| `-e`, `--experiment` | Experiment subfolder name (default: `baseline`) |
+| `-n`, `--sample` | Translate only the first N items |
+| `--skip-preflight` | Skip API/environment checks |
 
 ### Run tests
 
@@ -209,7 +223,8 @@ data/
 │   │   └── parallel_corpus/       # CodeNet Python-Go pairs (1,668 entries)
 └── translation/
     ├── source/           # Python source files (local dataset)
-    └── target/           # Translated Go output (provider/variant subdirs)
+    └── target/           # Translated Go output
+        └── <dataset>/<provider>/<variant>/<experiment>/  # e.g. humaneval-x/minimax/M2.5/rag/
 ```
 
 ## Design
@@ -254,7 +269,7 @@ We use the Agno agent framework to solve this: the translation agent enforces a 
 1. **Preflight checks** — verify API keys, Go compiler, and LLM connectivity before starting
 2. **File discovery** — find Python source files (local) or load HumanEval-X problems from HuggingFace
 3. **Agent translation** — for each file, the Agno agent sends the Python code to the selected LLM and receives a `TranslationResult` with structured Go output
-4. **Output storage** — translated Go files are saved to `data/translation/target/<dataset>/<provider>/<variant>/`
+4. **Output storage** — translated Go files are saved to `data/translation/target/<dataset>/<provider>/<variant>/<experiment>/`
 
 ### Evaluation pipeline
 

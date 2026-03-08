@@ -2,12 +2,16 @@
 
 import chromadb
 
-from src.config import CHROMA_PERSIST_DIR
+from src.rag.embeddings import load_rag_config
 
 
 def get_chroma_client() -> chromadb.ClientAPI:
-    CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(path=str(CHROMA_PERSIST_DIR))
+    cfg = load_rag_config()
+    chroma_cfg = cfg["chromadb"]
+    return chromadb.HttpClient(
+        host=chroma_cfg["host"],
+        port=chroma_cfg["port"],
+    )
 
 
 def get_or_create_collection(

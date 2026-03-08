@@ -2,6 +2,10 @@
 # Switch embedding provider to test the pipeline without an API key.
 # After verifying the pipeline works, change to "openai" for production quality.
 
+chromadb:
+  host: "localhost"
+  port: 8000
+
 embedding:
   # Provider: "default" (free, local) or "openai" (requires OPENAI_API_KEY)
   provider: "default"

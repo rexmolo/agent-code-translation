@@ -17,6 +17,7 @@ Multiple LLM providers are supported through a registry (Google Gemini, MiniMax)
 - [uv](https://docs.astral.sh/uv/) for package management
 - Go compiler (for local evaluation)
 - Docker (for HumanEval-X evaluation)
+- ChromaDB Docker container (for RAG vector store)
 
 ## Setup
 
@@ -99,9 +100,20 @@ Retrieval uses **Hybrid Search**: BM25 (exact keyword matching, good for API nam
 
 ### Setup & Configuration
 
-The embedding model is configured in `config/rag_config.yaml`:
+ChromaDB runs as a Docker container. Ensure it's running before ingesting or querying:
+
+```bash
+# Example: start ChromaDB via docker-compose (from your Docker project)
+docker compose up -d chromadb
+```
+
+Connection and embedding settings are in `config/rag_config.yaml`:
 
 ```yaml
+chromadb:
+  host: "localhost"
+  port: 8000
+
 embedding:
   provider: "default"   # "default" (free, local) or "openai" (requires API key)
 ```
@@ -126,8 +138,7 @@ Uses `text-embedding-3-large` (3072 dims). Better retrieval quality for code.
 # 2. Switch provider in config/rag_config.yaml
 #    provider: "openai"
 
-# 3. Clear old embeddings (different dimensions) and re-ingest
-rm -rf data/RAG/chromadb/
+# 3. Re-ingest (old collections with different dimensions will be overwritten)
 uv run python src/scripts/ingest_rag.py
 ```
 
@@ -181,9 +192,8 @@ src/
 ├── rag/                  # RAG retrieval system
 │   ├── api_extractor.py  # Tree-sitter Python API/call extraction
 │   ├── embeddings.py     # Embedding function factory (reads rag_config.yaml)
-│   ├── rag_config.yaml   # Embedding provider & retrieval settings
 │   ├── retriever.py      # Hybrid retrieval (BM25 + dense + RRF)
-│   └── store.py          # ChromaDB client & collection management
+│   └── store.py          # ChromaDB HttpClient & collection management
 ├── scripts/              # One-off data processing scripts
 │   ├── extract_codenet_data.py    # Extract CodeNet parallel corpus
 │   ├── generate_api_mappings.py   # Generate Python→Go API mappings
@@ -197,7 +207,6 @@ data/
 │   │   ├── api_mappings.jsonl     # Python→Go API mappings (180 entries)
 │   │   ├── go_docs.jsonl          # Go docs + patterns (157 entries)
 │   │   └── parallel_corpus/       # CodeNet Python-Go pairs (1,668 entries)
-│   └── chromadb/                  # ChromaDB persistent storage (gitignored)
 └── translation/
     ├── source/           # Python source files (local dataset)
     └── target/           # Translated Go output (provider/variant subdirs)

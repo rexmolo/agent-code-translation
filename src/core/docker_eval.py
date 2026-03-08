@@ -428,8 +428,8 @@ def evaluate_single_task(
     if docker_result.timed_out:
         record.notes = "Timed out"
     elif not docker_result.compiles:
-        record.notes = docker_result.stderr.strip()[:200]
+        record.notes = docker_result.stderr.strip()
     elif not docker_result.passes:
-        record.notes = docker_result.stderr.strip()[:200]
+        record.notes = docker_result.stderr.strip()
 
     return record

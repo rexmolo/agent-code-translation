@@ -18,6 +18,7 @@ from rich.panel import Panel
 
 from src.config import TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
 from src.core import pipeline as _pipeline
+from src.core.logger import set_verbose
 from src.providers.registry import enable_model, list_providers, list_variants
 
 console = Console()
@@ -220,6 +221,13 @@ def _interactive():
             ).ask())
             kwargs["experiment"] = experiment_name
 
+    # Verbose logging
+    enable_verbose = _ask_or_abort(
+        questionary.confirm("Enable verbose logging?", default=False, style=_style).ask()
+    )
+    if enable_verbose:
+        set_verbose(True)
+
     # Confirm
     console.print(
         f"\n→ [magenta]{selected_dataset}[/magenta] "
@@ -292,8 +300,14 @@ def cli(ctx):
     "-n", "--sample", type=int, default=None,
     help="Translate only the first N items.",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample):
+@click.option(
+    "-V", "--verbose", is_flag=True, default=False,
+    help="Enable verbose step-by-step logging.",
+)
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, verbose):
     """Run translation pipeline."""
+    if verbose:
+        set_verbose(True)
     if provider and variant:
         enable_model(provider, variant)
     kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment}
@@ -320,8 +334,14 @@ def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provi
     "--target-dir", type=click.Path(exists=True, path_type=Path), default=None,
     help="Path to the specific translated output folder.",
 )
-def evaluate(dataset, source_dir, target_dir):
+@click.option(
+    "-V", "--verbose", is_flag=True, default=False,
+    help="Enable verbose step-by-step logging.",
+)
+def evaluate(dataset, source_dir, target_dir, verbose):
     """Evaluate existing translated files."""
+    if verbose:
+        set_verbose(True)
     kwargs = {"dataset": dataset}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir

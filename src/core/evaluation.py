@@ -83,7 +83,7 @@ def evaluate_file(
             )
             record.compiles = comp.returncode == 0
             if not record.compiles:
-                record.notes = comp.stderr.strip()[:200]
+                record.notes = comp.stderr.strip()
                 log.print(f"  [red]FAIL[/red] go build: {record.notes}")
                 return record
             else:
@@ -110,7 +110,7 @@ def evaluate_file(
             record.runs_successfully = go_run.returncode == 0
             go_stdout = go_run.stdout
             if not record.runs_successfully:
-                record.notes = go_run.stderr.strip()[:200]
+                record.notes = go_run.stderr.strip()
                 log.print(f"  [red]FAIL[/red] go run: {record.notes}")
             else:
                 log.print(f"  [green]OK[/green]   go run: exit 0")

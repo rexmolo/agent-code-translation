@@ -150,6 +150,12 @@ def get_enabled_models() -> list[tuple[str, str, Any]]:
     return results
 
 
+def get_model_id(provider_key: str, variant_key: str) -> str:
+    """Return the model_id string for a provider+variant combination."""
+    _register_defaults()
+    return _REGISTRY[provider_key]["variants"][variant_key]["model_id"]
+
+
 def get_model_env_var(provider_key: str) -> str:
     """Return the environment variable name required for a provider."""
     _register_defaults()

@@ -21,6 +21,7 @@ TRANSLATION_TARGET_DIR = DATA_DIR / "translation" / "target"
 LOCAL_TARGET_DIR = TRANSLATION_TARGET_DIR / "local"
 HUMANEVAL_X_TARGET_DIR = TRANSLATION_TARGET_DIR / "humaneval-x"
 RAG_PROCESSED_DIR = DATA_DIR / "RAG" / "processed"
+ERROR_DB_PATH = DATA_DIR / "errors.db"
 
 # --- RAG ---
 PARALLEL_CORPUS_FILE = RAG_PROCESSED_DIR / "parallel_corpus" / "codeNet" / "python_go_pairs.jsonl"

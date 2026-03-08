@@ -46,7 +46,7 @@ node_modules/
 package-lock.json
 
 
-data/
+/data/
 src/temp/
 .env
 .env.example

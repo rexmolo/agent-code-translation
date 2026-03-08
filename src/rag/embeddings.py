@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 import chromadb.utils.embedding_functions as embedding_functions
 
-_CONFIG_PATH = Path(__file__).parent / "rag_config.yaml"
+_CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "rag_config.yaml"
 
 
 def load_rag_config() -> dict:

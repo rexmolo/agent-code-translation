@@ -99,7 +99,7 @@ Retrieval uses **Hybrid Search**: BM25 (exact keyword matching, good for API nam
 
 ### Setup & Configuration
 
-The embedding model is configured in `src/rag/rag_config.yaml`:
+The embedding model is configured in `config/rag_config.yaml`:
 
 ```yaml
 embedding:
@@ -123,7 +123,7 @@ Uses `text-embedding-3-large` (3072 dims). Better retrieval quality for code.
 # 1. Set your API key in .env
 #    OPENAI_API_KEY=sk-...
 
-# 2. Switch provider in src/rag/rag_config.yaml
+# 2. Switch provider in config/rag_config.yaml
 #    provider: "openai"
 
 # 3. Clear old embeddings (different dimensions) and re-ingest

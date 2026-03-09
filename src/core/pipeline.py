@@ -27,18 +27,47 @@ from src.core.logger import (
     log_translation_start, log_prompt, log_response,
     log_translation_done, log_translation_error,
     log_eval_start, log_eval_success, log_eval_error,
+    log_rag_retrieval,
 )
 from src.core.schemas import TranslationResult, EvaluationRecord
 from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars
 
 
-def _get_rag_context(python_code: str) -> str:
-    """Retrieve RAG context, returning empty string if unavailable."""
+def _get_rag_context(python_code: str, experiment: str = "baseline") -> str:
+    """Retrieve RAG context, returning empty string if unavailable or not needed."""
+    if experiment == "baseline":
+        return ""
     try:
         from src.rag.retriever import build_translation_context
-        return build_translation_context(python_code)
+        rag_result = build_translation_context(python_code)
+        log_rag_retrieval(rag_result)
+        return rag_result.context
     except Exception:
         return ""
+
+
+def _setup_and_display_kb(experiment: str, console: Console) -> None:
+    """Configure knowledge base toggles for the experiment and display status."""
+    from src.rag.retriever import configure_kb_for_experiment, get_active_kb_toggles
+
+    configure_kb_for_experiment(experiment)
+    toggles = get_active_kb_toggles(experiment)
+
+    if toggles is None:
+        console.print("   RAG: [dim]disabled (baseline)[/dim]")
+        return
+
+    labels = {
+        "code_snippets": "Code Snippets",
+        "api_mappings": "API Mappings",
+        "documentation": "Documentation",
+    }
+    parts = []
+    for key, label in labels.items():
+        enabled = toggles.get(key, True)
+        tag = f"[green]ON[/green]" if enabled else f"[red]OFF[/red]"
+        parts.append(f"{label}: {tag}")
+    console.print(f"   RAG: {' | '.join(parts)}")
 
 
 def _parse_target_path(target_dir: Path) -> tuple[str, str, str]:
@@ -202,6 +231,7 @@ def _translate_local(
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
+        _setup_and_display_kb(experiment, console)
         console.print(f"   Output: {model_target_dir}\n")
 
         translator = _agents.create_translation_agent(model)
@@ -218,7 +248,7 @@ def _translate_local(
                     target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
                     target_file.parent.mkdir(parents=True, exist_ok=True)
 
-                    rag_context = _get_rag_context(python_code)
+                    rag_context = _get_rag_context(python_code, experiment)
                     prompt = (
                         f"{rag_context}\n\n" if rag_context else ""
                     ) + (
@@ -315,6 +345,7 @@ def _translate_humaneval_x(
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
+        _setup_and_display_kb(experiment, console)
         console.print(f"   Output: {model_target_dir}\n")
 
         translator = _agents.create_translation_agent(model)
@@ -330,7 +361,7 @@ def _translate_humaneval_x(
                     target_file = model_target_dir / f"Go_{task_num}.go"
                     log_translation_start(pair["task_id"], provider_key, variant_key)
 
-                    rag_context = _get_rag_context(pair["py_solution"])
+                    rag_context = _get_rag_context(pair["py_solution"], experiment)
                     prompt = (
                         f"{rag_context}\n\n" if rag_context else ""
                     ) + (
@@ -428,9 +459,12 @@ def _evaluate_local(
         console.print("[yellow]No Python files found.[/yellow]")
         return
 
-    console.print(f"\n[bold blue]── Evaluating (local): {eval_target_dir} ──[/bold blue]\n")
-
     provider, variant, experiment = _parse_target_path(eval_target_dir)
+
+    console.print(f"\n[bold blue]── Evaluating (local): {eval_target_dir} ──[/bold blue]")
+    console.print(f"   Experiment: {experiment}")
+    _setup_and_display_kb(experiment, console)
+    console.print()
     model_id_str = get_model_id(provider, variant)
 
     records: list[EvaluationRecord] = []
@@ -484,9 +518,12 @@ def _evaluate_humaneval_x(
         batch_size = eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
 
-    console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]\n")
-
     provider, variant, experiment = _parse_target_path(eval_target_dir)
+
+    console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]")
+    console.print(f"   Experiment: {experiment}")
+    _setup_and_display_kb(experiment, console)
+    console.print()
     model_id_str = get_model_id(provider, variant)
 
     # Pre-flight: Docker

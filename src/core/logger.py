@@ -39,12 +39,48 @@ def log_translation_start(file_name: str, provider: str, variant: str) -> None:
         )
 
 
-def log_prompt(prompt: str, truncate: int = 500) -> None:
+def log_prompt(prompt: str) -> None:
     if not _verbose:
         return
-    display = prompt[:truncate] + ("..." if len(prompt) > truncate else "")
     with _log_lock:
-        _console.print(f"  [dim]prompt:[/dim] {display}")
+        _console.rule("[bold cyan]Final Prompt[/bold cyan]")
+        _console.print(prompt)
+        _console.rule()
+
+
+def log_rag_retrieval(rag_result: object) -> None:
+    """Log raw items retrieved from each RAG knowledge base."""
+    if not _verbose:
+        return
+    with _log_lock:
+        _console.rule("[bold cyan]RAG Retrieval Details[/bold cyan]")
+
+        # Code Snippets
+        snippets = getattr(rag_result, "code_snippets", [])
+        _console.print(f"  [bold]Code Snippets[/bold] ({len(snippets)} retrieved)")
+        for i, s in enumerate(snippets, 1):
+            _console.print(f"    [{i}] problem: {s.get('_id', 'N/A')}")
+            _console.print(f"        Python: {s.get('python_code', '')[:120]}...")
+            _console.print(f"        Go:     {s.get('go_code', '')[:120]}...")
+
+        # API Mappings
+        mappings = getattr(rag_result, "api_mappings", [])
+        _console.print(f"  [bold]API Mappings[/bold] ({len(mappings)} retrieved)")
+        for i, m in enumerate(mappings, 1):
+            _console.print(
+                f"    [{i}] {m.get('python_api', '?')} -> {m.get('go_api', '?')}: "
+                f"{m.get('description', '')}"
+            )
+
+        # Documentation
+        docs = getattr(rag_result, "documentation", [])
+        _console.print(f"  [bold]Documentation[/bold] ({len(docs)} retrieved)")
+        for i, d in enumerate(docs, 1):
+            _console.print(f"    [{i}] {d.get('api', '?')}: {d.get('description', '')}")
+            if d.get("example"):
+                _console.print(f"        example: {d['example'][:120]}...")
+
+        _console.rule()
 
 
 def log_response(result: object, target_path: str | None = None) -> None:

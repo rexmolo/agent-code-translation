@@ -217,6 +217,9 @@ def _interactive():
             _EXPERIMENT_CHOICES = [
                 Choice(title="baseline", value="baseline"),
                 Choice(title="rag", value="rag"),
+                Choice(title="rag-no-snippets", value="rag-no-snippets"),
+                Choice(title="rag-no-mappings", value="rag-no-mappings"),
+                Choice(title="rag-no-docs", value="rag-no-docs"),
                 Choice(title="Custom...", value="_custom"),
             ]
             selected_experiment = _ask_or_abort(questionary.select(

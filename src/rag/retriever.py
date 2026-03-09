@@ -112,12 +112,67 @@ _api_retriever: HybridRetriever | None = None
 _godoc_retriever: HybridRetriever | None = None
 _rag_cfg: dict | None = None
 
+# Runtime overrides for knowledge base toggles (set by configure_kb_for_experiment)
+_kb_overrides: dict[str, bool] | None = None
+
+# Experiment name -> knowledge base toggles
+_EXPERIMENT_KB_PRESETS: dict[str, dict[str, bool]] = {
+    "rag":             {"code_snippets": True,  "api_mappings": True,  "documentation": True},
+    "rag-no-snippets": {"code_snippets": False, "api_mappings": True,  "documentation": True},
+    "rag-no-mappings": {"code_snippets": True,  "api_mappings": False, "documentation": True},
+    "rag-no-docs":     {"code_snippets": True,  "api_mappings": True,  "documentation": False},
+}
+
+
+def configure_kb_for_experiment(experiment: str) -> dict[str, bool] | None:
+    """Apply knowledge base toggles for a given experiment name.
+
+    Returns the active KB toggles, or None if the experiment doesn't use RAG
+    (e.g. baseline).
+    """
+    global _kb_overrides
+
+    if experiment == "baseline":
+        _kb_overrides = None
+        return None
+
+    if experiment in _EXPERIMENT_KB_PRESETS:
+        _kb_overrides = _EXPERIMENT_KB_PRESETS[experiment]
+        return dict(_kb_overrides)
+
+    # Unknown experiment name: fall back to YAML knowledge_bases section
+    _kb_overrides = None
+    return _cfg().get("knowledge_bases")
+
+
+def get_active_kb_toggles(experiment: str) -> dict[str, bool] | None:
+    """Return the effective KB toggles for display purposes.
+
+    Returns None for experiments that don't use RAG (baseline).
+    """
+    if experiment == "baseline":
+        return None
+    if experiment in _EXPERIMENT_KB_PRESETS:
+        return _EXPERIMENT_KB_PRESETS[experiment]
+    return _cfg().get("knowledge_bases", {
+        "code_snippets": True, "api_mappings": True, "documentation": True,
+    })
+
 
 def _cfg() -> dict:
     global _rag_cfg
     if _rag_cfg is None:
         _rag_cfg = load_rag_config()
     return _rag_cfg
+
+
+def _get_kb_toggles() -> dict[str, bool]:
+    """Return effective KB toggles (runtime overrides take precedence over YAML)."""
+    if _kb_overrides is not None:
+        return _kb_overrides
+    return _cfg().get("knowledge_bases", {
+        "code_snippets": True, "api_mappings": True, "documentation": True,
+    })
 
 
 def _get_corpus_retriever() -> HybridRetriever:
@@ -183,7 +238,19 @@ def _get_godoc_retriever() -> HybridRetriever:
     return _godoc_retriever
 
 
-def build_translation_context(python_code: str) -> str:
+class RAGResult:
+    """Container for RAG retrieval results and the formatted context."""
+
+    __slots__ = ("api_mappings", "documentation", "code_snippets", "context")
+
+    def __init__(self) -> None:
+        self.api_mappings: list[dict] = []
+        self.documentation: list[dict] = []
+        self.code_snippets: list[dict] = []
+        self.context: str = ""
+
+
+def build_translation_context(python_code: str) -> RAGResult:
     """Structured RAG pipeline for Python-to-Go translation.
 
     Pipeline:
@@ -192,61 +259,76 @@ def build_translation_context(python_code: str) -> str:
       3. Query go_docs using matched Go APIs + error patterns if needed
       4. Query parallel_corpus for similar full-code examples
       5. Format all context for the LLM prompt
+
+    Returns a RAGResult with raw retrieved items and the formatted context string.
     """
     from src.rag.api_extractor import extract_api_info
 
     cfg = _cfg()["retrieval"]
+    kb_toggles = _get_kb_toggles()
+    use_code_snippets = kb_toggles.get("code_snippets", True)
+    use_api_mappings = kb_toggles.get("api_mappings", True)
+    use_documentation = kb_toggles.get("documentation", True)
     sections = []
+    result = RAGResult()
 
     # Step 1: Extract APIs from Python code
     api_info = extract_api_info(python_code)
 
     # Step 2: Query api_mappings using extracted API names (not raw code)
-    api_ret = _get_api_retriever()
-    api_query = api_info["query_apis"]
-    if api_info["query_imports"]:
-        api_query += " " + api_info["query_imports"]
-    mappings = api_ret.retrieve(api_query, n_results=cfg["api_mappings_k"]) if api_query.strip() else []
+    mappings = []
+    if use_api_mappings:
+        api_ret = _get_api_retriever()
+        api_query = api_info["query_apis"]
+        if api_info["query_imports"]:
+            api_query += " " + api_info["query_imports"]
+        mappings = api_ret.retrieve(api_query, n_results=cfg["api_mappings_k"]) if api_query.strip() else []
+        result.api_mappings = mappings
 
-    if mappings:
-        mapping_lines = [
-            f"- `{m['python_api']}` -> `{m['go_api']}`: {m['description']}"
-            for m in mappings
-        ]
-        sections.append("## Relevant API Mappings\n" + "\n".join(mapping_lines))
+        if mappings:
+            mapping_lines = [
+                f"- `{m['python_api']}` -> `{m['go_api']}`: {m['description']}"
+                for m in mappings
+            ]
+            sections.append("## Relevant API Mappings\n" + "\n".join(mapping_lines))
 
     # Step 3: Query go_docs using Go API names from mappings
-    godoc_ret = _get_godoc_retriever()
-    go_api_query = " ".join(m["go_api"] for m in mappings) if mappings else ""
+    docs = []
+    if use_documentation:
+        godoc_ret = _get_godoc_retriever()
+        go_api_query = " ".join(m["go_api"] for m in mappings) if mappings else ""
 
-    # If error handling detected, also search for error patterns
-    if api_info["has_error_handling"]:
-        go_api_query += " error handling pattern try except"
+        # If error handling detected, also search for error patterns
+        if api_info["has_error_handling"]:
+            go_api_query += " error handling pattern try except"
 
-    if go_api_query.strip():
-        docs = godoc_ret.retrieve(go_api_query, n_results=cfg["go_docs_k"])
-        if docs:
-            doc_lines = []
-            for d in docs:
-                line = f"- **{d['api']}**: {d['description']}"
-                if d.get("example"):
-                    line += f"\n  ```go\n  {d['example']}\n  ```"
-                doc_lines.append(line)
-            sections.append("## Go Documentation & Patterns\n" + "\n".join(doc_lines))
+        if go_api_query.strip():
+            docs = godoc_ret.retrieve(go_api_query, n_results=cfg["go_docs_k"])
+            if docs:
+                doc_lines = []
+                for d in docs:
+                    line = f"- **{d['api']}**: {d['description']}"
+                    if d.get("example"):
+                        line += f"\n  ```go\n  {d['example']}\n  ```"
+                    doc_lines.append(line)
+                sections.append("## Go Documentation & Patterns\n" + "\n".join(doc_lines))
+    result.documentation = docs
 
     # Step 4: Query parallel corpus for similar full-code examples
-    corpus_ret = _get_corpus_retriever()
-    similar = corpus_ret.retrieve(python_code, n_results=cfg["parallel_corpus_k"])
-    if similar:
-        examples = []
-        for i, s in enumerate(similar, 1):
-            examples.append(
-                f"### Example {i}\n"
-                f"**Python:**\n```python\n{s['python_code']}\n```\n"
-                f"**Go:**\n```go\n{s['go_code']}\n```"
-            )
-        sections.append("## Reference Translation Examples\n" + "\n\n".join(examples))
+    similar = []
+    if use_code_snippets:
+        corpus_ret = _get_corpus_retriever()
+        similar = corpus_ret.retrieve(python_code, n_results=cfg["parallel_corpus_k"])
+        if similar:
+            examples = []
+            for i, s in enumerate(similar, 1):
+                examples.append(
+                    f"### Example {i}\n"
+                    f"**Python:**\n```python\n{s['python_code']}\n```\n"
+                    f"**Go:**\n```go\n{s['go_code']}\n```"
+                )
+            sections.append("## Reference Translation Examples\n" + "\n\n".join(examples))
+    result.code_snippets = similar
 
-    if not sections:
-        return ""
-    return "\n\n".join(sections)
+    result.context = "\n\n".join(sections) if sections else ""
+    return result

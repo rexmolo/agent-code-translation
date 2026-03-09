@@ -1,7 +1,13 @@
-# Evaluation pipeline configuration
+# Pipeline configuration
+
+translation:
+  # Number of parallel LLM requests for translation.
+  # MiniMax M2.5: ~50 TPS normal, ~100 TPS off-peak.
+  # Recommended: 5–10 to stay within rate limits.
+  batch_size: 5
 
 parallel:
-  # Number of Docker containers to run concurrently.
+  # Number of Docker containers to run concurrently for evaluation.
   # Each container uses up to 512 MB memory, so adjust based on available RAM.
   # Recommended: 10–20 on a machine with 16+ GB RAM.
   batch_size: 10

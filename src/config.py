@@ -34,6 +34,7 @@ GO_DOCS_FILE = RAG_PROCESSED_DIR / "go_docs.jsonl"
 EVAL_CONFIG_PATH = REPO_ROOT / "config" / "eval_config.yaml"
 
 _EVAL_CONFIG_DEFAULTS = {
+    "translation": {"batch_size": 5},
     "parallel": {"batch_size": 10},
     "docker": {"image": "golang:1.26-alpine", "memory_limit": "512m", "timeout": 60},
 }

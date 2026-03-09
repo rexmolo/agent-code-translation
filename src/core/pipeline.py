@@ -222,6 +222,8 @@ def _translate_local(
     if sample is not None:
         py_files = py_files[:sample]
 
+    batch_size = load_eval_config()["translation"]["batch_size"]
+
     console.print(
         f"Found [bold]{len(py_files)}[/bold] Python file(s) to translate.\n"
     )
@@ -232,73 +234,79 @@ def _translate_local(
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
         _setup_and_display_kb(experiment, console)
-        console.print(f"   Output: {model_target_dir}\n")
+        console.print(f"   Output: {model_target_dir}")
+        console.print(f"   [dim]Parallel batch size: {batch_size}[/dim]\n")
 
-        translator = _agents.create_translation_agent(model)
+        print_lock = threading.Lock()
         records: list[dict] = []
-        interrupted = False
+
+        def _translate_one(py_file: Path) -> dict:
+            translator = _agents.create_translation_agent(model)
+            log_translation_start(py_file.name, provider_key, variant_key)
+            python_code = py_file.read_text(encoding="utf-8")
+            target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
+            target_file.parent.mkdir(parents=True, exist_ok=True)
+
+            rag_context = _get_rag_context(python_code, experiment)
+            prompt = (
+                f"{rag_context}\n\n" if rag_context else ""
+            ) + (
+                f"Translate the following Python code to Go:\n\n"
+                f"```python\n{python_code}\n```"
+            )
+            log_prompt(prompt)
+
+            try:
+                response = translator.run(prompt, stream=False)
+                result = response.content
+
+                if isinstance(result, TranslationResult):
+                    target_file.write_text(result.go_code, encoding="utf-8")
+                    log_response(result, str(target_file))
+                    log_translation_done(py_file.name, str(target_file))
+                    return {"source": str(py_file), "target": str(target_file), "status": "ok"}
+                else:
+                    log_response(result)
+                    return {"source": str(py_file), "target": str(target_file), "status": "no structured output"}
+            except Exception as e:
+                log_translation_error(py_file.name, e)
+                return {"source": str(py_file), "target": str(target_file), "status": f"error: {e}"}
 
         with Progress() as progress:
             task = progress.add_task(f"Translating ({label})...", total=len(py_files))
 
             try:
-                for py_file in py_files:
-                    log_translation_start(py_file.name, provider_key, variant_key)
-                    python_code = py_file.read_text(encoding="utf-8")
-                    target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
-                    target_file.parent.mkdir(parents=True, exist_ok=True)
+                with ThreadPoolExecutor(max_workers=batch_size) as executor:
+                    futures = {
+                        executor.submit(_translate_one, py_file): py_file
+                        for py_file in py_files
+                    }
 
-                    rag_context = _get_rag_context(python_code, experiment)
-                    prompt = (
-                        f"{rag_context}\n\n" if rag_context else ""
-                    ) + (
-                        f"Translate the following Python code to Go:\n\n"
-                        f"```python\n{python_code}\n```"
-                    )
-                    log_prompt(prompt)
-
-                    try:
-                        response = translator.run(prompt, stream=False)
-                        result = response.content
-
-                        if isinstance(result, TranslationResult):
-                            target_file.write_text(result.go_code, encoding="utf-8")
-                            records.append({
-                                "source": str(py_file),
-                                "target": str(target_file),
-                                "status": "ok",
-                            })
-                            log_response(result, str(target_file))
-                            log_translation_done(py_file.name, str(target_file))
-                            progress.console.print(
-                                f"  [green]OK[/green] {py_file.name} -> {target_file.name}"
+                    for future in as_completed(futures):
+                        py_file = futures[future]
+                        try:
+                            record = future.result()
+                            status_tag = (
+                                "[green]OK[/green]" if record["status"] == "ok"
+                                else "[yellow]WARN[/yellow]" if record["status"] == "no structured output"
+                                else "[red]FAIL[/red]"
                             )
-                        else:
+                            with print_lock:
+                                progress.console.print(f"  {status_tag} {py_file.name}")
+                                if record["status"] not in ("ok",):
+                                    progress.console.print(f"         [dim]{record['status']}[/dim]")
+                            records.append(record)
+                        except Exception as exc:
+                            with print_lock:
+                                progress.console.print(f"  [red]ERROR[/red] {py_file.name}: {exc}")
                             records.append({
-                                "source": str(py_file),
-                                "target": str(target_file),
-                                "status": "no structured output",
+                                "source": str(py_file), "target": "", "status": f"error: {exc}",
                             })
-                            log_response(result)
-                            progress.console.print(
-                                f"  [yellow]WARN[/yellow] {py_file.name}: "
-                                f"unexpected response type ({type(result).__name__})"
-                            )
-                    except Exception as e:
-                        records.append({
-                            "source": str(py_file),
-                            "target": str(target_file),
-                            "status": f"error: {e}",
-                        })
-                        log_translation_error(py_file.name, e)
-                        progress.console.print(f"  [red]FAIL[/red] {py_file.name}: {e}")
 
-                    progress.advance(task)
+                        progress.advance(task)
             except KeyboardInterrupt:
-                interrupted = True
-
-        if interrupted:
-            console.print("\n[yellow]Interrupted. Partial results saved.[/yellow]")
+                console.print("\n[yellow]Interrupted. Cancelling pending tasks...[/yellow]")
+                executor.shutdown(wait=False, cancel_futures=True)
 
         ok_count = sum(1 for r in records if r["status"] == "ok")
         console.print(
@@ -339,6 +347,8 @@ def _translate_humaneval_x(
     else:
         console.print()
 
+    batch_size = load_eval_config()["translation"]["batch_size"]
+
     for provider_key, variant_key, model in enabled:
         model_target_dir = target_dir / provider_key / variant_key / experiment
         model_target_dir.mkdir(parents=True, exist_ok=True)
@@ -346,77 +356,83 @@ def _translate_humaneval_x(
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
         _setup_and_display_kb(experiment, console)
-        console.print(f"   Output: {model_target_dir}\n")
+        console.print(f"   Output: {model_target_dir}")
+        console.print(f"   [dim]Parallel batch size: {batch_size}[/dim]\n")
 
-        translator = _agents.create_translation_agent(model)
+        print_lock = threading.Lock()
         records: list[dict] = []
-        interrupted = False
+
+        def _translate_one(pair: dict) -> dict:
+            translator = _agents.create_translation_agent(model)
+            task_num = pair["task_id"].split("/")[1]
+            target_file = model_target_dir / f"Go_{task_num}.go"
+            log_translation_start(pair["task_id"], provider_key, variant_key)
+
+            rag_context = _get_rag_context(pair["py_solution"], experiment)
+            prompt = (
+                f"{rag_context}\n\n" if rag_context else ""
+            ) + (
+                f"Translate the following Python code to Go.\n"
+                f"Use this Go function signature:\n"
+                f"```go\n{pair['declaration']}\n```\n\n"
+                f"Python code:\n"
+                f"```python\n{pair['py_solution']}\n```"
+            )
+            log_prompt(prompt)
+
+            try:
+                response = translator.run(prompt, stream=False)
+                result = response.content
+
+                if isinstance(result, TranslationResult):
+                    target_file.write_text(result.go_code, encoding="utf-8")
+                    log_response(result, str(target_file))
+                    log_translation_done(pair["task_id"], str(target_file))
+                    return {"source": pair["task_id"], "target": str(target_file), "status": "ok"}
+                else:
+                    log_response(result)
+                    return {"source": pair["task_id"], "target": str(target_file), "status": "no structured output"}
+            except Exception as e:
+                log_translation_error(pair["task_id"], e)
+                return {"source": pair["task_id"], "target": str(target_file), "status": f"error: {e}"}
 
         with Progress() as progress:
             task = progress.add_task(f"Translating ({label})...", total=len(pairs))
 
             try:
-                for pair in pairs:
-                    task_num = pair["task_id"].split("/")[1]
-                    target_file = model_target_dir / f"Go_{task_num}.go"
-                    log_translation_start(pair["task_id"], provider_key, variant_key)
+                with ThreadPoolExecutor(max_workers=batch_size) as executor:
+                    futures = {
+                        executor.submit(_translate_one, pair): pair
+                        for pair in pairs
+                    }
 
-                    rag_context = _get_rag_context(pair["py_solution"], experiment)
-                    prompt = (
-                        f"{rag_context}\n\n" if rag_context else ""
-                    ) + (
-                        f"Translate the following Python code to Go.\n"
-                        f"Use this Go function signature:\n"
-                        f"```go\n{pair['declaration']}\n```\n\n"
-                        f"Python code:\n"
-                        f"```python\n{pair['py_solution']}\n```"
-                    )
-                    log_prompt(prompt)
-
-                    try:
-                        response = translator.run(prompt, stream=False)
-                        result = response.content
-
-                        if isinstance(result, TranslationResult):
-                            target_file.write_text(result.go_code, encoding="utf-8")
-                            records.append({
-                                "source": pair["task_id"],
-                                "target": str(target_file),
-                                "status": "ok",
-                            })
-                            log_response(result, str(target_file))
-                            log_translation_done(pair["task_id"], str(target_file))
-                            progress.console.print(
-                                f"  [green]OK[/green] {pair['task_id']} -> {target_file.name}"
+                    for future in as_completed(futures):
+                        pair = futures[future]
+                        try:
+                            record = future.result()
+                            status_tag = (
+                                "[green]OK[/green]" if record["status"] == "ok"
+                                else "[yellow]WARN[/yellow]" if record["status"] == "no structured output"
+                                else "[red]FAIL[/red]"
                             )
-                        else:
+                            with print_lock:
+                                progress.console.print(
+                                    f"  {status_tag} {pair['task_id']} -> Go_{pair['task_id'].split('/')[1]}.go"
+                                )
+                                if record["status"] not in ("ok",):
+                                    progress.console.print(f"         [dim]{record['status']}[/dim]")
+                            records.append(record)
+                        except Exception as exc:
+                            with print_lock:
+                                progress.console.print(f"  [red]ERROR[/red] {pair['task_id']}: {exc}")
                             records.append({
-                                "source": pair["task_id"],
-                                "target": str(target_file),
-                                "status": "no structured output",
+                                "source": pair["task_id"], "target": "", "status": f"error: {exc}",
                             })
-                            log_response(result)
-                            progress.console.print(
-                                f"  [yellow]WARN[/yellow] {pair['task_id']}: "
-                                f"unexpected response type ({type(result).__name__})"
-                            )
-                    except Exception as e:
-                        records.append({
-                            "source": pair["task_id"],
-                            "target": str(target_file),
-                            "status": f"error: {e}",
-                        })
-                        log_translation_error(pair["task_id"], e)
-                        progress.console.print(
-                            f"  [red]FAIL[/red] {pair['task_id']}: {e}"
-                        )
 
-                    progress.advance(task)
+                        progress.advance(task)
             except KeyboardInterrupt:
-                interrupted = True
-
-        if interrupted:
-            console.print("\n[yellow]Interrupted. Partial results saved.[/yellow]")
+                console.print("\n[yellow]Interrupted. Cancelling pending tasks...[/yellow]")
+                executor.shutdown(wait=False, cancel_futures=True)
 
         ok_count = sum(1 for r in records if r["status"] == "ok")
         console.print(

@@ -61,7 +61,20 @@ uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -n 10
 
 # Evaluate existing translations
 uv run python -m src.cli evaluate -d humaneval-x --target-dir data/translation/target/humaneval-x/gemini/2.5_pro/baseline
+
+# Evaluate with custom parallelism (default batch size from config/eval_config.yaml)
+uv run python -m src.cli evaluate -d humaneval-x --target-dir data/translation/target/humaneval-x/minimax/M2.5/baseline -b 20
 ```
+
+Subcommand options for `evaluate`:
+
+| Option | Description |
+|---|---|
+| `-d`, `--dataset` | Dataset: `local` or `humaneval-x` (default: `local`) |
+| `--source-dir` | Override source directory |
+| `--target-dir` | Path to translated output folder to evaluate |
+| `-b`, `--batch-size` | Number of parallel Docker evaluations (overrides `config/eval_config.yaml`) |
+| `-V`, `--verbose` | Enable verbose step-by-step logging |
 
 Subcommand options for `translate`:
 
@@ -119,6 +132,18 @@ ChromaDB runs as a Docker container. Ensure it's running before ingesting or que
 ```bash
 # Example: start ChromaDB via docker-compose (from your Docker project)
 docker compose up -d chromadb
+```
+
+Evaluation pipeline settings (parallel batch size, Docker timeout) are in `config/eval_config.yaml`:
+
+```yaml
+parallel:
+  batch_size: 10    # Number of concurrent Docker containers
+
+docker:
+  image: "golang:1.26-alpine"
+  memory_limit: "512m"
+  timeout: 60       # Per-container timeout in seconds
 ```
 
 Connection and embedding settings are in `config/rag_config.yaml`:
@@ -189,12 +214,14 @@ src/
 ├── cli/                  # Click + Questionary interactive CLI
 │   ├── __init__.py       # CLI entry point, interactive & subcommand modes
 │   └── __main__.py       # python -m src.cli support
-├── config.py             # Shared path constants
+├── config.py             # Shared path constants and config loaders
 ├── core/                 # Core logic
 │   ├── agents.py         # Agno translation agent definition
 │   ├── docker_eval.py    # Docker-based HumanEval-X evaluation
+│   ├── error_db.py       # SQLite persistence for evaluation errors (thread-safe)
 │   ├── evaluation.py     # File discovery, mirroring, local Go evaluation
-│   ├── pipeline.py       # High-level orchestration (translate / evaluate)
+│   ├── logger.py         # Verbose pipeline logger with Rich (thread-safe)
+│   ├── pipeline.py       # High-level orchestration (translate / evaluate, parallel)
 │   ├── reporting.py      # Rich summary tables and metric computation
 │   ├── schemas.py        # Pydantic data models (TranslationResult, EvaluationRecord, etc.)
 │   └── tools.py          # Agno @tool functions (compile, run, compare)
@@ -281,10 +308,10 @@ Evaluation differs by dataset because the correctness signals differ:
 3. **Output comparison** — run both the Python source and Go translation, compare stdout. If a Go test file exists, run `go test` instead
 4. Aggregate results into per-file and summary tables
 
-**HumanEval-X** (Docker-sandboxed):
+**HumanEval-X** (Docker-sandboxed, parallel):
 1. Build `solution.go` from LLM output (strip markdown fences, extract declarations, reconstruct package/imports)
 2. Build `solution_test.go` from HumanEval-X test harness (add package header, detect needed imports like testify)
-3. Run inside Docker (`golang:1.26-alpine`) with `--network=none` and `--memory=512m`:
+3. Run in parallel batches (configurable via `config/eval_config.yaml` or `-b` flag) inside Docker (`golang:1.26-alpine`) with `--network=none` and `--memory=512m`:
    - `go vet ./...` for compile check
    - `go test -v -count=1 ./...` for test execution
 4. Aggregate results
@@ -317,10 +344,9 @@ Adding a new provider requires only registering factory functions — no changes
 
 ## Evaluation Metrics
 
-| Metric | Description |
-|---|---|
-| Compilation@1 | Fraction of translations that compile successfully on first attempt |
-| Runs Rate | Fraction that execute without runtime errors |
-| Pass@1 | Fraction that produce correct output or pass all tests on first attempt |
-| AST Similarity | Structural similarity between source and target ASTs |
-| Test Pass Rate | Fraction of unit tests passed (when test suites are available) |
+| Metric | Datasets | Description |
+|---|---|---|
+| Compilation@1 | Local, HumanEval-X | Fraction of translations that compile successfully on first attempt |
+| Runs Successfully | Local only | Fraction that execute without runtime errors (not applicable to HumanEval-X function-only code) |
+| Pass@1 | Local, HumanEval-X | Fraction that produce correct output or pass all tests on first attempt |
+| AST Similarity | Local | Structural similarity between source and target ASTs |

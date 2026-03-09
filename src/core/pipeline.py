@@ -594,6 +594,6 @@ def _evaluate_humaneval_x(
             console.print("\n[yellow]Interrupted. Cancelling pending tasks...[/yellow]")
             executor.shutdown(wait=False, cancel_futures=True)
 
-    _reporting.display_per_file_table(records)
-    summary = _reporting.compute_summary(records)
+    _reporting.display_per_file_table(records, dataset="humaneval-x")
+    summary = _reporting.compute_summary(records, dataset="humaneval-x")
     _reporting.display_summary_table(summary)

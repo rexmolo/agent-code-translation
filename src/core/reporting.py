@@ -8,12 +8,13 @@ from rich.table import Table
 from src.core.schemas import EvaluationRecord
 
 
-def compute_summary(records: list[EvaluationRecord]) -> dict:
+def compute_summary(records: list[EvaluationRecord], dataset: str = "local") -> dict:
     """Compute aggregate metrics from individual evaluation records."""
     total = len(records)
     if total == 0:
         return {
             "total_files": 0,
+            "dataset": dataset,
             "compilation_at_1": 0.0,
             "runs_rate": 0.0,
             "pass_at_1": 0.0,
@@ -24,6 +25,7 @@ def compute_summary(records: list[EvaluationRecord]) -> dict:
 
     return {
         "total_files": total,
+        "dataset": dataset,
         "compilation_at_1": sum(r.compiles for r in records) / total,
         "runs_rate": sum(r.runs_successfully for r in records) / total,
         "pass_at_1": sum(r.pass_at_1 for r in records) / total,
@@ -36,6 +38,7 @@ def compute_summary(records: list[EvaluationRecord]) -> dict:
 def display_summary_table(summary: dict) -> None:
     """Print a Rich table of aggregate evaluation metrics."""
     console = Console()
+    dataset = summary.get("dataset", "local")
     table = Table(title="Translation Evaluation Metrics")
     table.add_column("Metric", style="cyan", no_wrap=True)
     table.add_column("Value", justify="right", style="green")
@@ -45,10 +48,11 @@ def display_summary_table(summary: dict) -> None:
         "Compilation@1",
         f"{summary['compilation_at_1']:.1%}",
     )
-    table.add_row(
-        "Runs Successfully",
-        f"{summary['runs_rate']:.1%}",
-    )
+    if dataset != "humaneval-x":
+        table.add_row(
+            "Runs Successfully",
+            f"{summary['runs_rate']:.1%}",
+        )
     table.add_row(
         "Pass@1",
         f"{summary['pass_at_1']:.1%}",
@@ -61,13 +65,15 @@ def display_summary_table(summary: dict) -> None:
     console.print(table)
 
 
-def display_per_file_table(records: list[EvaluationRecord]) -> None:
+def display_per_file_table(records: list[EvaluationRecord], dataset: str = "local") -> None:
     """Print per-file evaluation results as a Rich table."""
     console = Console()
+    show_runs = dataset != "humaneval-x"
     table = Table(title="Per-File Evaluation Results")
     table.add_column("Source", style="cyan")
     table.add_column("Compiles", justify="center")
-    table.add_column("Runs", justify="center")
+    if show_runs:
+        table.add_column("Runs", justify="center")
     table.add_column("Pass@1", justify="center")
 
     has_ast = any(r.ast_similarity > 0 for r in records)
@@ -89,9 +95,10 @@ def display_per_file_table(records: list[EvaluationRecord]) -> None:
         row = [
             Path(r.source_file).name,
             check(r.compiles),
-            check(r.runs_successfully),
-            check(r.pass_at_1),
         ]
+        if show_runs:
+            row.append(check(r.runs_successfully))
+        row.append(check(r.pass_at_1))
         if has_ast:
             row.append(f"{r.ast_similarity:.2f}" if r.ast_similarity > 0 else "[dim]-[/dim]")
         row.append(tests_str)

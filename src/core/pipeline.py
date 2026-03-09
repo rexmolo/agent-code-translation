@@ -5,6 +5,8 @@ evaluation workflows across datasets (local, HumanEval-X) and models.
 """
 
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from rich.console import Console
@@ -15,6 +17,7 @@ from src.config import (
     TRANSLATION_TARGET_DIR,
     LOCAL_TARGET_DIR,
     HUMANEVAL_X_TARGET_DIR,
+    load_eval_config,
 )
 from src.core import agents as _agents
 from src.core import reporting as _reporting
@@ -331,7 +334,7 @@ def _translate_humaneval_x(
                     prompt = (
                         f"{rag_context}\n\n" if rag_context else ""
                     ) + (
-                        f"Translate the following Python function to Go.\n"
+                        f"Translate the following Python code to Go.\n"
                         f"Use this Go function signature:\n"
                         f"```go\n{pair['declaration']}\n```\n\n"
                         f"Python code:\n"
@@ -394,12 +397,13 @@ def evaluate(
     source_dir: Path = TRANSLATION_SOURCE_DIR,
     eval_target_dir: Path | None = None,
     dataset: str = "local",
+    batch_size: int | None = None,
 ) -> None:
     """Dispatch evaluation to the appropriate pipeline based on dataset."""
     if dataset == "local":
         _evaluate_local(source_dir, eval_target_dir)
     elif dataset == "humaneval-x":
-        _evaluate_humaneval_x(eval_target_dir)
+        _evaluate_humaneval_x(eval_target_dir, batch_size=batch_size)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -446,8 +450,14 @@ def _evaluate_local(
 
 def _evaluate_humaneval_x(
     eval_target_dir: Path | None = None,
+    batch_size: int | None = None,
 ) -> None:
-    """Evaluate HumanEval-X translations using Docker."""
+    """Evaluate HumanEval-X translations using Docker.
+
+    Runs evaluations in parallel using ThreadPoolExecutor. Batch size
+    is read from config/eval_config.yaml but can be overridden via
+    the batch_size parameter or --batch-size CLI flag.
+    """
     from src.data.humaneval_x import load_humaneval_x
 
     from src.core.docker_eval import (
@@ -467,6 +477,12 @@ def _evaluate_humaneval_x(
     if not eval_target_dir.exists():
         console.print(f"[yellow]Directory does not exist: {eval_target_dir}[/yellow]")
         return
+
+    # Load eval config
+    eval_config = load_eval_config()
+    if batch_size is None:
+        batch_size = eval_config["parallel"]["batch_size"]
+    timeout = eval_config["docker"]["timeout"]
 
     console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]\n")
 
@@ -496,50 +512,87 @@ def _evaluate_humaneval_x(
     console.print(f"Loaded [bold]{len(pairs)}[/bold] HumanEval-X problems.\n")
 
     # Discover Go_*.go files
-    go_files = sorted(eval_target_dir.glob("Go_*.go"))
+    go_files = sorted(eval_target_dir.glob("Go_*.go"), key=lambda f: int(f.stem.replace("Go_", "")))
     if not go_files:
         console.print("[yellow]No Go_*.go files found in target directory.[/yellow]")
         return
 
-    console.print(f"Found [bold]{len(go_files)}[/bold] translated Go files to evaluate.\n")
+    console.print(f"Found [bold]{len(go_files)}[/bold] translated Go files to evaluate.")
+    console.print(f"[dim]Parallel batch size: {batch_size}[/dim]\n")
+
+    # Build work items (skip files with no matching task)
+    work_items: list[tuple[Path, dict]] = []
+    skipped = 0
+    for go_file in go_files:
+        task_num = go_file.stem.replace("Go_", "")
+        pair = task_lookup.get(task_num)
+        if pair is None:
+            console.print(f"  [yellow]SKIP[/yellow] {go_file.name}: no matching HumanEval-X task")
+            skipped += 1
+            continue
+        work_items.append((go_file, pair))
 
     records: list[EvaluationRecord] = []
+    print_lock = threading.Lock()
+
+    def _eval_one(go_file: Path, pair: dict) -> tuple[Path, dict, EvaluationRecord]:
+        """Evaluate a single file — called from the thread pool."""
+        generated_code = go_file.read_text(encoding="utf-8")
+        test_code = pair["test"]
+        log_eval_start(go_file.name)
+        record = evaluate_single_task(
+            task_id=pair["task_id"],
+            generated_code=generated_code,
+            test_code=test_code,
+            timeout=timeout,
+        )
+        _handle_eval_record(record, go_file.name, provider, variant, experiment, model_id_str)
+        return go_file, pair, record
 
     with Progress() as progress:
         task = progress.add_task("Evaluating...", total=len(go_files))
 
-        for go_file in go_files:
-            match = go_file.stem.replace("Go_", "")
-            task_num = match
+        # Account for skipped files in progress
+        if skipped:
+            progress.advance(task, advance=skipped)
 
-            pair = task_lookup.get(task_num)
-            if pair is None:
-                progress.console.print(
-                    f"  [yellow]SKIP[/yellow] {go_file.name}: no matching HumanEval-X task"
-                )
-                progress.advance(task)
-                continue
+        try:
+            with ThreadPoolExecutor(max_workers=batch_size) as executor:
+                futures = {
+                    executor.submit(_eval_one, go_file, pair): (go_file, pair)
+                    for go_file, pair in work_items
+                }
 
-            generated_code = go_file.read_text(encoding="utf-8")
-            test_code = pair["test"]
+                for future in as_completed(futures):
+                    try:
+                        go_file, pair, record = future.result()
 
-            log_eval_start(go_file.name)
-            record = evaluate_single_task(
-                task_id=pair["task_id"],
-                generated_code=generated_code,
-                test_code=test_code,
-            )
-            _handle_eval_record(record, go_file.name, provider, variant, experiment, model_id_str)
+                        status = "[green]PASS[/green]" if record.pass_at_1 else (
+                            "[yellow]COMPILE[/yellow]" if record.compiles else "[red]FAIL[/red]"
+                        )
+                        with print_lock:
+                            progress.console.print(f"  {status} {go_file.name} ({pair['task_id']})")
+                            if record.notes:
+                                progress.console.print(f"         [dim]{record.notes[:100]}[/dim]")
 
-            status = "[green]PASS[/green]" if record.pass_at_1 else (
-                "[yellow]COMPILE[/yellow]" if record.compiles else "[red]FAIL[/red]"
-            )
-            progress.console.print(f"  {status} {go_file.name} ({pair['task_id']})")
-            if record.notes:
-                progress.console.print(f"         [dim]{record.notes[:100]}[/dim]")
+                        records.append(record)
+                    except Exception as exc:
+                        go_file, pair = futures[future]
+                        with print_lock:
+                            progress.console.print(
+                                f"  [red]ERROR[/red] {go_file.name}: {exc}"
+                            )
+                        records.append(EvaluationRecord(
+                            source_file=pair["task_id"],
+                            target_file=go_file.name,
+                            dataset="humaneval-x",
+                            notes=f"Worker error: {exc}",
+                        ))
 
-            records.append(record)
-            progress.advance(task)
+                    progress.advance(task)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted. Cancelling pending tasks...[/yellow]")
+            executor.shutdown(wait=False, cancel_futures=True)
 
     _reporting.display_per_file_table(records)
     summary = _reporting.compute_summary(records)

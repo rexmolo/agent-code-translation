@@ -1,0 +1,12 @@
+# Evaluation pipeline configuration
+
+parallel:
+  # Number of Docker containers to run concurrently.
+  # Each container uses up to 512 MB memory, so adjust based on available RAM.
+  # Recommended: 10–20 on a machine with 16+ GB RAM.
+  batch_size: 10
+
+docker:
+  image: "golang:1.26-alpine"
+  memory_limit: "512m"
+  timeout: 60

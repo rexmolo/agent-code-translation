@@ -214,12 +214,22 @@ def _interactive():
 
         # Step: Experiment name
         if "experiment" in sig.parameters:
-            experiment_name = _ask_or_abort(questionary.text(
-                "Experiment name:",
-                default="baseline",
+            _EXPERIMENT_CHOICES = [
+                Choice(title="baseline", value="baseline"),
+                Choice(title="rag", value="rag"),
+                Choice(title="Custom...", value="_custom"),
+            ]
+            selected_experiment = _ask_or_abort(questionary.select(
+                "Select experiment:",
+                choices=_EXPERIMENT_CHOICES,
                 style=_style,
             ).ask())
-            kwargs["experiment"] = experiment_name
+            if selected_experiment == "_custom":
+                selected_experiment = _ask_or_abort(questionary.text(
+                    "Enter experiment name:",
+                    style=_style,
+                ).ask())
+            kwargs["experiment"] = selected_experiment
 
     # Verbose logging
     enable_verbose = _ask_or_abort(
@@ -335,10 +345,14 @@ def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provi
     help="Path to the specific translated output folder.",
 )
 @click.option(
+    "-b", "--batch-size", type=int, default=None,
+    help="Number of parallel Docker evaluations (overrides config/eval_config.yaml).",
+)
+@click.option(
     "-V", "--verbose", is_flag=True, default=False,
     help="Enable verbose step-by-step logging.",
 )
-def evaluate(dataset, source_dir, target_dir, verbose):
+def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
     """Evaluate existing translated files."""
     if verbose:
         set_verbose(True)
@@ -347,4 +361,6 @@ def evaluate(dataset, source_dir, target_dir, verbose):
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
         kwargs["eval_target_dir"] = target_dir
+    if batch_size is not None:
+        kwargs["batch_size"] = batch_size
     _pipeline.evaluate(**kwargs)

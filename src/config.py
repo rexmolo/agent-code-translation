@@ -7,6 +7,8 @@ Usage:
 
 from pathlib import Path
 
+import yaml
+
 # Project root (the 'experiments' directory)
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -27,3 +29,27 @@ ERROR_DB_PATH = DATA_DIR / "errors.db"
 PARALLEL_CORPUS_FILE = RAG_PROCESSED_DIR / "parallel_corpus" / "codeNet" / "python_go_pairs.jsonl"
 API_MAPPINGS_FILE = RAG_PROCESSED_DIR / "api_mappings.jsonl"
 GO_DOCS_FILE = RAG_PROCESSED_DIR / "go_docs.jsonl"
+
+# --- Config files ---
+EVAL_CONFIG_PATH = REPO_ROOT / "config" / "eval_config.yaml"
+
+_EVAL_CONFIG_DEFAULTS = {
+    "parallel": {"batch_size": 10},
+    "docker": {"image": "golang:1.26-alpine", "memory_limit": "512m", "timeout": 60},
+}
+
+
+def load_eval_config() -> dict:
+    """Load evaluation config from YAML, falling back to defaults."""
+    if EVAL_CONFIG_PATH.exists():
+        with open(EVAL_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        # Merge defaults for missing keys
+        for section, defaults in _EVAL_CONFIG_DEFAULTS.items():
+            if section not in cfg:
+                cfg[section] = defaults
+            elif isinstance(defaults, dict):
+                for k, v in defaults.items():
+                    cfg[section].setdefault(k, v)
+        return cfg
+    return dict(_EVAL_CONFIG_DEFAULTS)

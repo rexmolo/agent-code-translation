@@ -5,6 +5,7 @@ Uses lazy connection singleton — table is auto-created on first call.
 """
 
 import sqlite3
+import threading
 from datetime import datetime, timezone
 
 from src.config import ERROR_DB_PATH
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS evaluation_errors (
 )
 """
 
+_lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
 
@@ -30,10 +32,12 @@ def _get_conn() -> sqlite3.Connection:
     """Return (and cache) the SQLite connection, creating the table if needed."""
     global _conn
     if _conn is None:
-        ERROR_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _conn = sqlite3.connect(str(ERROR_DB_PATH))
-        _conn.execute(_CREATE_TABLE)
-        _conn.commit()
+        with _lock:
+            if _conn is None:
+                ERROR_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _conn = sqlite3.connect(str(ERROR_DB_PATH), check_same_thread=False)
+                _conn.execute(_CREATE_TABLE)
+                _conn.commit()
     return _conn
 
 
@@ -48,21 +52,22 @@ def save_error(
 ) -> None:
     """Insert one evaluation error record."""
     conn = _get_conn()
-    conn.execute(
-        """\
-        INSERT INTO evaluation_errors
-            (file_name, err_type, err_log_context, provider, model, variant, time, experiment_type)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            file_name,
-            err_type,
-            err_log_context,
-            provider,
-            model,
-            variant,
-            datetime.now(timezone.utc).isoformat(),
-            experiment_type,
-        ),
-    )
-    conn.commit()
+    with _lock:
+        conn.execute(
+            """\
+            INSERT INTO evaluation_errors
+                (file_name, err_type, err_log_context, provider, model, variant, time, experiment_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file_name,
+                err_type,
+                err_log_context,
+                provider,
+                model,
+                variant,
+                datetime.now(timezone.utc).isoformat(),
+                experiment_type,
+            ),
+        )
+        conn.commit()

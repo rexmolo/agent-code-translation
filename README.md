@@ -83,7 +83,7 @@ Subcommand options for `translate`:
 | `-d`, `--dataset` | Dataset: `local` or `humaneval-x` (default: `local`) |
 | `-p`, `--provider` | Provider key (e.g. `minimax`, `gemini`) |
 | `-v`, `--variant` | Model variant key (e.g. `M2.5`, `2.5_pro`) |
-| `-e`, `--experiment` | Experiment subfolder name (default: `baseline`) |
+| `-e`, `--experiment` | Experiment name: `baseline`, `rag`, `rag-no-snippets`, `rag-no-mappings`, `rag-no-docs` (default: `baseline`) |
 | `-n`, `--sample` | Translate only the first N items |
 | `--skip-preflight` | Skip API/environment checks |
 
@@ -125,6 +125,34 @@ Python code
 
 Retrieval uses **Hybrid Search**: BM25 (exact keyword matching, good for API names) + Dense embeddings (semantic similarity), merged with Reciprocal Rank Fusion.
 
+### Ablation Experiments
+
+The system supports ablation experiments to measure the contribution of each RAG knowledge base. The experiment name controls which knowledge bases are active — no manual config editing needed.
+
+| Experiment | Code Snippets | API Mappings | Documentation |
+|---|---|---|---|
+| `baseline` | — | — | — |
+| `rag` | ON | ON | ON |
+| `rag-no-snippets` | OFF | ON | ON |
+| `rag-no-mappings` | ON | OFF | ON |
+| `rag-no-docs` | ON | ON | OFF |
+
+Select an experiment via the interactive CLI or the `-e` flag:
+
+```bash
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-no-snippets -n 10
+```
+
+Before translation or evaluation, the active KB configuration is displayed:
+
+```
+── Model: minimax/M2.5 ──
+   Experiment: rag-no-snippets
+   RAG: Code Snippets: OFF | API Mappings: ON | Documentation: ON
+   Output: data/translation/target/humaneval-x/minimax/M2.5/rag-no-snippets
+   Parallel batch size: 5
+```
+
 ### Setup & Configuration
 
 ChromaDB runs as a Docker container. Ensure it's running before ingesting or querying:
@@ -134,11 +162,14 @@ ChromaDB runs as a Docker container. Ensure it's running before ingesting or que
 docker compose up -d chromadb
 ```
 
-Evaluation pipeline settings (parallel batch size, Docker timeout) are in `config/eval_config.yaml`:
+Pipeline settings (parallelism, Docker timeout) are in `config/eval_config.yaml`:
 
 ```yaml
+translation:
+  batch_size: 5     # Parallel LLM requests for translation
+
 parallel:
-  batch_size: 10    # Number of concurrent Docker containers
+  batch_size: 10    # Concurrent Docker containers for evaluation
 
 docker:
   image: "golang:1.26-alpine"
@@ -146,7 +177,9 @@ docker:
   timeout: 60       # Per-container timeout in seconds
 ```
 
-Connection and embedding settings are in `config/rag_config.yaml`:
+Both translation and evaluation run in parallel using `ThreadPoolExecutor`. Each translation thread creates its own agent instance for thread safety.
+
+Connection, embedding, and knowledge base settings are in `config/rag_config.yaml`:
 
 ```yaml
 chromadb:
@@ -155,7 +188,14 @@ chromadb:
 
 embedding:
   provider: "default"   # "default" (free, local) or "openai" (requires API key)
+
+knowledge_bases:
+  code_snippets: true    # Parallel corpus (Python-Go translation examples)
+  api_mappings: true     # Python -> Go API equivalences
+  documentation: true    # Go standard library docs & patterns
 ```
+
+The `knowledge_bases` toggles serve as a manual fallback for custom experiment names. For the built-in experiment presets, toggles are applied automatically (see [Ablation Experiments](#ablation-experiments)).
 
 **Option 1: Free local embeddings (default, no API key needed)**
 
@@ -294,9 +334,13 @@ We use the Agno agent framework to solve this: the translation agent enforces a 
 ### Translation pipeline
 
 1. **Preflight checks** — verify API keys, Go compiler, and LLM connectivity before starting
-2. **File discovery** — find Python source files (local) or load HumanEval-X problems from HuggingFace
-3. **Agent translation** — for each file, the Agno agent sends the Python code to the selected LLM and receives a `TranslationResult` with structured Go output
-4. **Output storage** — translated Go files are saved to `data/translation/target/<dataset>/<provider>/<variant>/<experiment>/`
+2. **KB configuration** — apply knowledge base toggles based on experiment name and display active status
+3. **File discovery** — find Python source files (local) or load HumanEval-X problems from HuggingFace
+4. **Parallel translation** — files are translated concurrently using a thread pool (batch size from `config/eval_config.yaml`). Each thread:
+   - Retrieves RAG context (API mappings, documentation, code snippets) based on active KB toggles
+   - Creates its own Agno agent instance and sends the prompt to the LLM
+   - Receives a `TranslationResult` with structured Go output
+5. **Output storage** — translated Go files are saved to `data/translation/target/<dataset>/<provider>/<variant>/<experiment>/`
 
 ### Evaluation pipeline
 

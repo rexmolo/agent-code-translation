@@ -97,6 +97,21 @@ Subcommand options for `translate`:
 | `-n`, `--sample` | Translate only the first N items |
 | `--skip-preflight` | Skip API/environment checks |
 
+### Automated Evaluation (CI)
+
+A headless evaluation script is provided to automatically discover and evaluate all HumanEval-X experiments at once. This script generates a Markdown comparison table and a bar chart plot.
+
+```bash
+# Evaluate all experiments under data/translation/target/humaneval-x/
+# Creates results/comparison.md, comparison.png, and per-experiment JSON files
+uv run python src/scripts/ci_evaluate_all.py
+
+# Reduce parallelism if your machine lacks memory/CPU (default is from config)
+uv run python src/scripts/ci_evaluate_all.py --batch-size 3
+```
+
+This script is also integrated into GitHub Actions (`.github/workflows/evaluate.yml`). Whenever Go files in the `data/translation/target/humaneval-x/` directory are pushed to the `main` branch, the workflow will run the evaluation, upload the `results/` folder as an artifact, and attach the comparison table and plot to the GitHub Actions Job Summary.
+
 ### Run tests
 
 ```bash

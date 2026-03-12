@@ -13,6 +13,7 @@ Usage:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -232,6 +233,10 @@ def generate_plot(all_results: list[dict], output_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate all HumanEval-X experiments")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override parallel batch size")
+    args = parser.parse_args()
+
     # Load HumanEval-X dataset
     console.print("[dim]Loading HumanEval-X dataset...[/dim]")
     from src.data.humaneval_x import load_humaneval_x
@@ -240,7 +245,7 @@ def main() -> None:
 
     # Load eval config
     eval_config = load_eval_config()
-    batch_size = eval_config["parallel"]["batch_size"]
+    batch_size = args.batch_size if args.batch_size is not None else eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
 
     # Pre-flight: Docker

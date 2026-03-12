@@ -36,7 +36,7 @@ jobs:
         run: docker pull golang:1.26-alpine
 
       - name: Run evaluation for all experiments
-        run: uv run python src/scripts/ci_evaluate_all.py
+        run: uv run python src/scripts/ci_evaluate_all.py --batch-size 3
 
       - name: Write job summary
         if: always()

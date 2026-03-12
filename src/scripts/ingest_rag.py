@@ -8,7 +8,6 @@ Usage:
 import json
 
 import click
-from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress
 
@@ -19,8 +18,6 @@ from src.config import (
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
 from src.rag.store import get_chroma_client, get_or_create_collection
-
-load_dotenv()
 
 console = Console()
 BATCH_SIZE = 100

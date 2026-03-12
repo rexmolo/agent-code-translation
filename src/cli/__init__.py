@@ -11,7 +11,6 @@ from pathlib import Path
 
 import click
 import questionary
-from dotenv import load_dotenv
 from questionary import Choice, Style
 from rich.console import Console
 from rich.panel import Panel
@@ -234,6 +233,19 @@ def _interactive():
                 ).ask())
             kwargs["experiment"] = selected_experiment
 
+            # Step: Embedding backend (only for RAG experiments)
+            if selected_experiment != "baseline" and "embedding_backend" in sig.parameters:
+                _EMBEDDING_CHOICES = [
+                    Choice(title="ChromaDB (default embeddings)", value="chromadb"),
+                    Choice(title="Gemini (Vertex AI Vector Search)", value="gemini"),
+                ]
+                selected_backend = _ask_or_abort(questionary.select(
+                    "Select embedding backend:",
+                    choices=_EMBEDDING_CHOICES,
+                    style=_style,
+                ).ask())
+                kwargs["embedding_backend"] = selected_backend
+
     # Verbose logging
     enable_verbose = _ask_or_abort(
         questionary.confirm("Enable verbose logging?", default=False, style=_style).ask()
@@ -274,7 +286,6 @@ def _interactive():
 @click.pass_context
 def cli(ctx):
     """Thesis experiment CLI — translate Python to Go and evaluate results."""
-    load_dotenv()
     if ctx.invoked_subcommand is None:
         _interactive()
 
@@ -317,13 +328,18 @@ def cli(ctx):
     "-V", "--verbose", is_flag=True, default=False,
     help="Enable verbose step-by-step logging.",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, verbose):
+@click.option(
+    "--embedding-backend", type=click.Choice(["chromadb", "gemini"]),
+    default="chromadb", show_default=True,
+    help="Embedding backend for RAG retrieval.",
+)
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, verbose, embedding_backend):
     """Run translation pipeline."""
     if verbose:
         set_verbose(True)
     if provider and variant:
         enable_model(provider, variant)
-    kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment}
+    kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment, "embedding_backend": embedding_backend}
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:

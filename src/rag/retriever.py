@@ -1,4 +1,8 @@
-"""Hybrid retrieval: BM25 (sparse) + ChromaDB dense + Reciprocal Rank Fusion.
+"""Hybrid retrieval: BM25 (sparse) + dense retrieval + Reciprocal Rank Fusion.
+
+Supports two dense backends:
+  - ChromaDB (default): local vector DB with configurable embedding model
+  - Gemini: Vertex AI Vector Search with Gemini embeddings
 
 Pipeline (matching thesis design):
   1. Input: Python code
@@ -21,7 +25,6 @@ from src.config import (
     PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
-from src.rag.store import get_chroma_client, get_or_create_collection
 
 
 def _tokenize_code(text: str) -> list[str]:
@@ -54,6 +57,8 @@ class HybridRetriever:
     """Combines ChromaDB dense retrieval with BM25 sparse retrieval."""
 
     def __init__(self, collection_name: str, documents: list[dict], text_key: str, rrf_k: int = 60):
+        from src.rag.store import get_chroma_client, get_or_create_collection
+
         self._ef = get_embedding_function()
         client = get_chroma_client()
         self._collection = get_or_create_collection(client, collection_name, self._ef)
@@ -104,12 +109,104 @@ class HybridRetriever:
         return results
 
 
+class VertexAIRetriever:
+    """Combines Vertex AI Vector Search dense retrieval with BM25 sparse retrieval."""
+
+    def __init__(self, collection_name: str, documents: list[dict], text_key: str, rrf_k: int = 60):
+        from src.rag.embeddings import GeminiEmbeddingFunction
+        from src.rag.vertex_store import (
+            ensure_deployed,
+            get_or_create_endpoint,
+            get_or_create_index,
+        )
+
+        cfg = load_rag_config()
+        model = cfg["embedding"]["gemini"]["model"]
+        self._ef = GeminiEmbeddingFunction(model_name=model)
+        self._collection_name = collection_name
+        self._rrf_k = rrf_k
+
+        # Vertex AI resources (lazy, cached at module level)
+        self._endpoint = _get_vertex_endpoint()
+        self._deployed_index_id = _get_vertex_deployed_id()
+
+        # Build ID -> document index
+        self._id_to_doc: dict[str, dict] = {}
+        corpus_texts = []
+        for doc in documents:
+            doc_id = doc["_id"]
+            self._id_to_doc[doc_id] = doc
+            corpus_texts.append(doc[text_key])
+
+        # Build BM25 index (same as HybridRetriever)
+        tokenized = [_tokenize_code(t) for t in corpus_texts]
+        self._bm25 = BM25Okapi(tokenized)
+        self._doc_ids = [doc["_id"] for doc in documents]
+
+    def retrieve(self, query: str, n_results: int = 5) -> list[dict]:
+        from src.rag.vertex_store import query_neighbors
+
+        fetch_k = n_results * 3
+
+        # Dense retrieval from Vertex AI
+        query_embedding = self._ef.embed_query(query)
+        dense_ids = query_neighbors(
+            self._endpoint,
+            self._deployed_index_id,
+            query_embedding,
+            n_results=fetch_k,
+            collection_name=self._collection_name,
+        )
+
+        # BM25 retrieval
+        tokenized_query = _tokenize_code(query)
+        bm25_scores = self._bm25.get_scores(tokenized_query)
+        top_indices = sorted(
+            range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
+        )[:fetch_k]
+        bm25_ids = [self._doc_ids[i] for i in top_indices]
+
+        # Reciprocal Rank Fusion
+        merged_ids = _reciprocal_rank_fusion([dense_ids, bm25_ids], k=self._rrf_k)
+
+        results = []
+        for doc_id in merged_ids[:n_results]:
+            if doc_id in self._id_to_doc:
+                results.append(self._id_to_doc[doc_id])
+        return results
+
+
 # ---------------------------------------------------------------------------
-# Singleton retrievers (lazy-initialized)
+# Vertex AI resource singletons (lazy-initialized)
 # ---------------------------------------------------------------------------
-_corpus_retriever: HybridRetriever | None = None
-_api_retriever: HybridRetriever | None = None
-_godoc_retriever: HybridRetriever | None = None
+_vertex_endpoint = None
+_vertex_deployed_id: str | None = None
+
+
+def _get_vertex_endpoint():
+    global _vertex_endpoint, _vertex_deployed_id
+    if _vertex_endpoint is None:
+        from src.rag.vertex_store import (
+            ensure_deployed,
+            get_or_create_endpoint,
+            get_or_create_index,
+        )
+        index = get_or_create_index()
+        _vertex_endpoint = get_or_create_endpoint()
+        _vertex_deployed_id = ensure_deployed(index, _vertex_endpoint)
+    return _vertex_endpoint
+
+
+def _get_vertex_deployed_id() -> str:
+    if _vertex_deployed_id is None:
+        _get_vertex_endpoint()  # triggers initialization
+    return _vertex_deployed_id
+
+
+# ---------------------------------------------------------------------------
+# Singleton retrievers (lazy-initialized), keyed by backend
+# ---------------------------------------------------------------------------
+_retrievers: dict[tuple[str, str], HybridRetriever | VertexAIRetriever] = {}
 _rag_cfg: dict | None = None
 
 # Runtime overrides for knowledge base toggles (set by configure_kb_for_experiment)
@@ -175,9 +272,30 @@ def _get_kb_toggles() -> dict[str, bool]:
     })
 
 
-def _get_corpus_retriever() -> HybridRetriever:
-    global _corpus_retriever
-    if _corpus_retriever is None:
+def _make_retriever(
+    backend: str,
+    collection_name: str,
+    documents: list[dict],
+    text_key: str,
+) -> HybridRetriever | VertexAIRetriever:
+    """Create a retriever for the given backend, with caching."""
+    cache_key = (backend, collection_name)
+    if cache_key not in _retrievers:
+        rrf_k = _cfg()["retrieval"]["rrf_k"]
+        if backend == "gemini":
+            _retrievers[cache_key] = VertexAIRetriever(
+                collection_name, documents, text_key, rrf_k=rrf_k,
+            )
+        else:
+            _retrievers[cache_key] = HybridRetriever(
+                collection_name, documents, text_key, rrf_k=rrf_k,
+            )
+    return _retrievers[cache_key]
+
+
+def _get_corpus_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
+    cache_key = (backend, "parallel_corpus")
+    if cache_key not in _retrievers:
         records = _load_jsonl(PARALLEL_CORPUS_FILE)
         docs = []
         for r in records:
@@ -187,16 +305,13 @@ def _get_corpus_retriever() -> HybridRetriever:
                 "go_code": r["go_code"],
                 "problem_description": r.get("problem_description", ""),
             })
-        _corpus_retriever = HybridRetriever(
-            "parallel_corpus", docs, "python_code",
-            rrf_k=_cfg()["retrieval"]["rrf_k"],
-        )
-    return _corpus_retriever
+        _retrievers[cache_key] = _make_retriever(backend, "parallel_corpus", docs, "python_code")
+    return _retrievers[cache_key]
 
 
-def _get_api_retriever() -> HybridRetriever:
-    global _api_retriever
-    if _api_retriever is None:
+def _get_api_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
+    cache_key = (backend, "api_mappings")
+    if cache_key not in _retrievers:
         records = _load_jsonl(API_MAPPINGS_FILE)
         docs = []
         for i, r in enumerate(records):
@@ -209,16 +324,13 @@ def _get_api_retriever() -> HybridRetriever:
                 "go_api": r["go_api"],
                 "description": r["description"],
             })
-        _api_retriever = HybridRetriever(
-            "api_mappings", docs, "text",
-            rrf_k=_cfg()["retrieval"]["rrf_k"],
-        )
-    return _api_retriever
+        _retrievers[cache_key] = _make_retriever(backend, "api_mappings", docs, "text")
+    return _retrievers[cache_key]
 
 
-def _get_godoc_retriever() -> HybridRetriever:
-    global _godoc_retriever
-    if _godoc_retriever is None:
+def _get_godoc_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
+    cache_key = (backend, "go_docs")
+    if cache_key not in _retrievers:
         records = _load_jsonl(GO_DOCS_FILE)
         docs = []
         for i, r in enumerate(records):
@@ -231,11 +343,8 @@ def _get_godoc_retriever() -> HybridRetriever:
                 "description": r["description"],
                 "example": r.get("example", ""),
             })
-        _godoc_retriever = HybridRetriever(
-            "go_docs", docs, "text",
-            rrf_k=_cfg()["retrieval"]["rrf_k"],
-        )
-    return _godoc_retriever
+        _retrievers[cache_key] = _make_retriever(backend, "go_docs", docs, "text")
+    return _retrievers[cache_key]
 
 
 class RAGResult:
@@ -250,7 +359,10 @@ class RAGResult:
         self.context: str = ""
 
 
-def build_translation_context(python_code: str) -> RAGResult:
+def build_translation_context(
+    python_code: str,
+    embedding_backend: str = "chromadb",
+) -> RAGResult:
     """Structured RAG pipeline for Python-to-Go translation.
 
     Pipeline:
@@ -259,6 +371,10 @@ def build_translation_context(python_code: str) -> RAGResult:
       3. Query go_docs using matched Go APIs + error patterns if needed
       4. Query parallel_corpus for similar full-code examples
       5. Format all context for the LLM prompt
+
+    Args:
+        python_code: The source Python code to translate.
+        embedding_backend: "chromadb" for ChromaDB or "gemini" for Vertex AI.
 
     Returns a RAGResult with raw retrieved items and the formatted context string.
     """
@@ -278,7 +394,7 @@ def build_translation_context(python_code: str) -> RAGResult:
     # Step 2: Query api_mappings using extracted API names (not raw code)
     mappings = []
     if use_api_mappings:
-        api_ret = _get_api_retriever()
+        api_ret = _get_api_retriever(embedding_backend)
         api_query = api_info["query_apis"]
         if api_info["query_imports"]:
             api_query += " " + api_info["query_imports"]
@@ -295,7 +411,7 @@ def build_translation_context(python_code: str) -> RAGResult:
     # Step 3: Query go_docs using Go API names from mappings
     docs = []
     if use_documentation:
-        godoc_ret = _get_godoc_retriever()
+        godoc_ret = _get_godoc_retriever(embedding_backend)
         go_api_query = " ".join(m["go_api"] for m in mappings) if mappings else ""
 
         # If error handling detected, also search for error patterns
@@ -317,7 +433,7 @@ def build_translation_context(python_code: str) -> RAGResult:
     # Step 4: Query parallel corpus for similar full-code examples
     similar = []
     if use_code_snippets:
-        corpus_ret = _get_corpus_retriever()
+        corpus_ret = _get_corpus_retriever(embedding_backend)
         similar = corpus_ret.retrieve(python_code, n_results=cfg["parallel_corpus_k"])
         if similar:
             examples = []

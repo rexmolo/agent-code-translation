@@ -46,8 +46,12 @@ node_modules/
 package-lock.json
 
 
-/data/
+/data/*
+!/data/translation/
+/data/translation/*
+!/data/translation/target/
 src/temp/
 .env
 .env.example
+config/providers.yaml
 .doc

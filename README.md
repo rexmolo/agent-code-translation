@@ -25,17 +25,26 @@ Multiple LLM providers are supported through a registry (Google Gemini, MiniMax)
 # Install dependencies
 uv sync
 
-# Configure environment variables
-cp .env.example .env   # then fill in your API keys
+# Configure provider credentials
+cp config/providers.yaml.example config/providers.yaml
+# Then edit config/providers.yaml with your API keys
 ```
 
-Required environment variables (depending on provider):
+Credentials are managed in `config/providers.yaml`. Each provider supports two methods — set the key directly (`api_key`) or point to an environment variable (`api_key_env`):
 
-| Variable | Provider | Required |
+| Provider | Credential | Notes |
 |---|---|---|
-| `MINIMAX_API_KEY` | MiniMax | For MiniMax models |
-| `GOOGLE_API_KEY` | Google Gemini | For Gemini models |
-| `OPENAI_API_KEY` | OpenAI | Only if using OpenAI embeddings for RAG (optional) |
+| MiniMax | `api_key` or `MINIMAX_API_KEY` env | Required for MiniMax models |
+| Google Gemini | `api_key` / `GOOGLE_API_KEY` env, or Vertex AI mode | See Vertex AI section below |
+| OpenAI | `api_key` or `OPENAI_API_KEY` env | Only for OpenAI RAG embeddings (optional) |
+
+**Vertex AI mode** (for Google Gemini): If using Vertex AI instead of a standard API key, set the following environment variables and authenticate via `gcloud auth application-default login`:
+
+| Variable | Description |
+|---|---|
+| `GOOGLE_GENAI_USE_VERTEXAI` | Set to `true` to activate Vertex AI mode |
+| `GOOGLE_CLOUD_PROJECT` | Your GCP project ID |
+| `GOOGLE_CLOUD_LOCATION` | Region (default: `us-central1`) |
 
 ## Usage
 
@@ -84,6 +93,7 @@ Subcommand options for `translate`:
 | `-p`, `--provider` | Provider key (e.g. `minimax`, `gemini`) |
 | `-v`, `--variant` | Model variant key (e.g. `M2.5`, `2.5_pro`) |
 | `-e`, `--experiment` | Experiment name: `baseline`, `rag`, `rag-no-snippets`, `rag-no-mappings`, `rag-no-docs` (default: `baseline`) |
+| `--embedding-backend` | Embedding backend for RAG: `chromadb` (default) or `gemini` (Vertex AI Vector Search) |
 | `-n`, `--sample` | Translate only the first N items |
 | `--skip-preflight` | Skip API/environment checks |
 
@@ -124,6 +134,21 @@ Python code
 ```
 
 Retrieval uses **Hybrid Search**: BM25 (exact keyword matching, good for API names) + Dense embeddings (semantic similarity), merged with Reciprocal Rank Fusion.
+
+### Embedding Backends
+
+The system supports two embedding backends for comparing embedding model performance:
+
+| Backend | Embedding Model | Vector Store | Dimensions |
+|---|---|---|---|
+| `chromadb` (default) | all-MiniLM-L6-v2 (local) or OpenAI | ChromaDB (local Docker) | 384 / 3072 |
+| `gemini` | Gemini Embedding 001 | Vertex AI Vector Search (Google Cloud) | 3072 |
+
+Both backends use the same hybrid retrieval strategy (BM25 + dense + RRF). Select the backend via the interactive CLI or the `--embedding-backend` flag:
+
+```bash
+uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -e rag --embedding-backend gemini -n 10
+```
 
 ### Ablation Experiments
 
@@ -179,6 +204,8 @@ docker:
 
 Both translation and evaluation run in parallel using `ThreadPoolExecutor`. Each translation thread creates its own agent instance for thread safety.
 
+Provider credentials are in `config/providers.yaml` (see [Setup](#setup)). This file is gitignored; copy from `config/providers.yaml.example`.
+
 Connection, embedding, and knowledge base settings are in `config/rag_config.yaml`:
 
 ```yaml
@@ -187,7 +214,7 @@ chromadb:
   port: 8000
 
 embedding:
-  provider: "default"   # "default" (free, local) or "openai" (requires API key)
+  provider: "default"   # "default" (free, local), "openai", or "gemini"
 
 knowledge_bases:
   code_snippets: true    # Parallel corpus (Python-Go translation examples)
@@ -211,14 +238,27 @@ uv run python src/scripts/ingest_rag.py
 Uses `text-embedding-3-large` (3072 dims). Better retrieval quality for code.
 
 ```bash
-# 1. Set your API key in .env
-#    OPENAI_API_KEY=sk-...
+# 1. Set your API key in config/providers.yaml under openai.api_key
 
 # 2. Switch provider in config/rag_config.yaml
 #    provider: "openai"
 
 # 3. Re-ingest (old collections with different dimensions will be overwritten)
 uv run python src/scripts/ingest_rag.py
+```
+
+**Option 3: Gemini embeddings + Vertex AI Vector Search**
+
+Uses Google's `gemini-embedding-001` model (3072 dims) with Vertex AI Vector Search as the vector store. Requires GCP project and Vertex AI access.
+
+```bash
+# 1. Ensure Vertex AI credentials are set (see Setup section)
+
+# 2. Ingest data into Vertex AI (first run creates index + endpoint, ~20-30 min)
+uv run python src/scripts/ingest_rag_gemini.py
+
+# 3. Use --embedding-backend gemini when translating
+uv run python -m src.cli translate -e rag --embedding-backend gemini
 ```
 
 ### Ingest Options
@@ -272,14 +312,16 @@ src/
 │   └── registry.py       # Multi-provider model registry with lazy factories
 ├── rag/                  # RAG retrieval system
 │   ├── api_extractor.py  # Tree-sitter Python API/call extraction
-│   ├── embeddings.py     # Embedding function factory (reads rag_config.yaml)
-│   ├── retriever.py      # Hybrid retrieval (BM25 + dense + RRF)
-│   └── store.py          # ChromaDB HttpClient & collection management
+│   ├── embeddings.py     # Embedding function factory (default, OpenAI, Gemini)
+│   ├── retriever.py      # Hybrid retrieval (BM25 + dense + RRF), ChromaDB & Vertex AI backends
+│   ├── store.py          # ChromaDB HttpClient & collection management
+│   └── vertex_store.py   # Vertex AI Vector Search resource management
 ├── scripts/              # One-off data processing scripts
 │   ├── extract_codenet_data.py    # Extract CodeNet parallel corpus
 │   ├── generate_api_mappings.py   # Generate Python→Go API mappings
 │   ├── generate_go_docs.py        # Generate Go std library docs
-│   └── ingest_rag.py             # Ingest JSONL data into ChromaDB
+│   ├── ingest_rag.py             # Ingest JSONL data into ChromaDB
+│   └── ingest_rag_gemini.py      # Ingest JSONL data into Vertex AI Vector Search
 └── tests/                # All tests (64 test cases)
 
 data/

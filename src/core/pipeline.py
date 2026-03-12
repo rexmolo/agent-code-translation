@@ -30,23 +30,31 @@ from src.core.logger import (
     log_rag_retrieval,
 )
 from src.core.schemas import TranslationResult, EvaluationRecord
-from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars
+from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars, resolve_provider_api_key
 
 
-def _get_rag_context(python_code: str, experiment: str = "baseline") -> str:
+def _get_rag_context(
+    python_code: str,
+    experiment: str = "baseline",
+    embedding_backend: str = "chromadb",
+) -> str:
     """Retrieve RAG context, returning empty string if unavailable or not needed."""
     if experiment == "baseline":
         return ""
     try:
         from src.rag.retriever import build_translation_context
-        rag_result = build_translation_context(python_code)
+        rag_result = build_translation_context(python_code, embedding_backend=embedding_backend)
         log_rag_retrieval(rag_result)
         return rag_result.context
     except Exception:
         return ""
 
 
-def _setup_and_display_kb(experiment: str, console: Console) -> None:
+def _setup_and_display_kb(
+    experiment: str,
+    console: Console,
+    embedding_backend: str = "chromadb",
+) -> None:
     """Configure knowledge base toggles for the experiment and display status."""
     from src.rag.retriever import configure_kb_for_experiment, get_active_kb_toggles
 
@@ -68,6 +76,8 @@ def _setup_and_display_kb(experiment: str, console: Console) -> None:
         tag = f"[green]ON[/green]" if enabled else f"[red]OFF[/red]"
         parts.append(f"{label}: {tag}")
     console.print(f"   RAG: {' | '.join(parts)}")
+    backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
+    console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
 
 
 def _parse_target_path(target_dir: Path) -> tuple[str, str, str]:
@@ -128,7 +138,7 @@ def preflight_check(console: Console, enabled_models: list[tuple[str, str, objec
         checked_providers.add(provider_key)
 
         vertex_vars = get_model_vertex_env_vars(provider_key)
-        if vertex_vars and os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "").lower() == "true":
+        if vertex_vars and os.getenv(vertex_vars[0], "").lower() == "true":
             missing = [v for v in vertex_vars if not os.getenv(v)]
             if missing:
                 console.print(f"[red]FAIL[/red] Vertex AI vars missing: {', '.join(missing)}")
@@ -136,13 +146,12 @@ def preflight_check(console: Console, enabled_models: list[tuple[str, str, objec
             else:
                 console.print(f"[green]OK[/green]   Vertex AI credentials set for {provider_key}")
         else:
-            env_var = get_model_env_var(provider_key)
-            key = os.getenv(env_var)
+            key = resolve_provider_api_key(provider_key)
             if not key or len(key) < 10:
-                console.print(f"[red]FAIL[/red] {env_var} is not set or invalid in .env")
+                console.print(f"[red]FAIL[/red] API key for {provider_key} is not configured in providers.yaml or env")
                 ok = False
             else:
-                console.print(f"[green]OK[/green]   {env_var} is set")
+                console.print(f"[green]OK[/green]   API key set for {provider_key}")
 
     # 2. Go compiler
     if shutil.which("go"):
@@ -182,12 +191,13 @@ def translate(
     dataset: str = "local",
     sample: int | None = None,
     experiment: str = "baseline",
+    embedding_backend: str = "chromadb",
 ) -> None:
     """Dispatch translation to the appropriate pipeline based on dataset."""
     if dataset == "local":
-        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment)
+        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment)
+        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -198,6 +208,7 @@ def _translate_local(
     skip_preflight: bool = False,
     sample: int | None = None,
     experiment: str = "baseline",
+    embedding_backend: str = "chromadb",
 ) -> None:
     """Translate local Python files to Go.
 
@@ -233,7 +244,7 @@ def _translate_local(
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
-        _setup_and_display_kb(experiment, console)
+        _setup_and_display_kb(experiment, console, embedding_backend)
         console.print(f"   Output: {model_target_dir}")
         console.print(f"   [dim]Parallel batch size: {batch_size}[/dim]\n")
 
@@ -247,7 +258,7 @@ def _translate_local(
             target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
             target_file.parent.mkdir(parents=True, exist_ok=True)
 
-            rag_context = _get_rag_context(python_code, experiment)
+            rag_context = _get_rag_context(python_code, experiment, embedding_backend)
             prompt = (
                 f"{rag_context}\n\n" if rag_context else ""
             ) + (
@@ -319,6 +330,7 @@ def _translate_humaneval_x(
     skip_preflight: bool = False,
     sample: int | None = None,
     experiment: str = "baseline",
+    embedding_backend: str = "chromadb",
 ) -> None:
     """Translate HumanEval-X Python problems to Go.
 
@@ -355,7 +367,7 @@ def _translate_humaneval_x(
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
-        _setup_and_display_kb(experiment, console)
+        _setup_and_display_kb(experiment, console, embedding_backend)
         console.print(f"   Output: {model_target_dir}")
         console.print(f"   [dim]Parallel batch size: {batch_size}[/dim]\n")
 
@@ -368,7 +380,7 @@ def _translate_humaneval_x(
             target_file = model_target_dir / f"Go_{task_num}.go"
             log_translation_start(pair["task_id"], provider_key, variant_key)
 
-            rag_context = _get_rag_context(pair["py_solution"], experiment)
+            rag_context = _get_rag_context(pair["py_solution"], experiment, embedding_backend)
             prompt = (
                 f"{rag_context}\n\n" if rag_context else ""
             ) + (

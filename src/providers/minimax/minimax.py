@@ -39,7 +39,8 @@ class MiniMax(Claude):
 
     def _get_client_params(self) -> Dict[str, Any]:
         if self.api_key is None:
-            self.api_key = getenv("MINIMAX_API_KEY")
+            from src.config import load_providers_config, resolve_api_key
+            self.api_key = resolve_api_key(load_providers_config()["minimax"])
         return super()._get_client_params()
 
     def get_client(self) -> AnthropicClient:

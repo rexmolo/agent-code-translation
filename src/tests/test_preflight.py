@@ -9,9 +9,6 @@ import os
 import subprocess
 
 import pytest
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from src.core.agents import create_translation_agent
 from src.providers.minimax import MiniMax
@@ -21,9 +18,10 @@ class TestEnvironment:
     """Verify that required environment variables and tools are available."""
 
     def test_minimax_api_key_is_set(self):
-        key = os.getenv("MINIMAX_API_KEY")
-        assert key is not None, "MINIMAX_API_KEY is not set in .env"
-        assert len(key) > 10, "MINIMAX_API_KEY looks too short to be valid"
+        from src.config import load_providers_config, resolve_api_key
+        key = resolve_api_key(load_providers_config()["minimax"])
+        assert key is not None, "MiniMax API key is not configured in providers.yaml or env"
+        assert len(key) > 10, "MiniMax API key looks too short to be valid"
 
     def test_go_compiler_available(self):
         result = subprocess.run(

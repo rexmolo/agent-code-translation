@@ -26,6 +26,9 @@ def _register_defaults() -> None:
     if _REGISTRY:
         return
 
+    from src.config import load_providers_config
+    pcfg = load_providers_config()
+
     def _minimax_factory(model_id: str) -> Callable:
         def factory():
             from src.providers.minimax import MiniMax
@@ -38,12 +41,16 @@ def _register_defaults() -> None:
             return Gemini(id=model_id, location=location)
         return factory
 
+    google_cfg = pcfg["google"]
+    vertex_cfg = google_cfg["vertex_ai"]
+
     _REGISTRY["gemini"] = {
-        "env_var": "GOOGLE_API_KEY",
+        "provider_cfg": google_cfg,
+        "env_var": google_cfg.get("api_key_env", ""),
         "vertex_env_vars": [
-            "GOOGLE_GENAI_USE_VERTEXAI",
-            "GOOGLE_CLOUD_PROJECT",
-            "GOOGLE_CLOUD_LOCATION",
+            vertex_cfg["enabled_env"],
+            vertex_cfg["project_env"],
+            vertex_cfg["location_env"],
         ],
         "label": "Google Gemini",
         "variants": {
@@ -81,7 +88,8 @@ def _register_defaults() -> None:
     }
 
     _REGISTRY["minimax"] = {
-        "env_var": "MINIMAX_API_KEY",
+        "provider_cfg": pcfg["minimax"],
+        "env_var": pcfg["minimax"].get("api_key_env", ""),
         "label": "MiniMax",
         "variants": {
             "M2.5": {
@@ -160,6 +168,13 @@ def get_model_env_var(provider_key: str) -> str:
     """Return the environment variable name required for a provider."""
     _register_defaults()
     return _REGISTRY[provider_key]["env_var"]
+
+
+def resolve_provider_api_key(provider_key: str) -> str | None:
+    """Resolve the API key for a provider (from YAML or env var)."""
+    from src.config import resolve_api_key
+    _register_defaults()
+    return resolve_api_key(_REGISTRY[provider_key]["provider_cfg"])
 
 
 def get_model_vertex_env_vars(provider_key: str) -> list[str] | None:

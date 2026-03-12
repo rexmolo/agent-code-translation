@@ -5,10 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "data/translation/target/humaneval-x/**"
-      - "src/core/docker_eval.py"
-      - "src/scripts/ci_evaluate_all.py"
-      - "src/data/humaneval_x.py"
+      - "data/translation/target/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

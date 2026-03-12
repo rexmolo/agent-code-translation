@@ -80,10 +80,18 @@ def _setup_and_display_kb(
     console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
 
 
-def _parse_target_path(target_dir: Path) -> tuple[str, str, str]:
-    """Extract (provider, variant, experiment) from a target directory path."""
+def _parse_target_path(target_dir: Path) -> tuple[str, str, str | tuple[str, str]]:
+    """Extract provider, variant, and experiment/backend from a target directory path.
+    
+    If it's baseline, returns: (provider, variant, "baseline")
+    If it's RAG, returns: (provider, variant, ("rag...", "backend"))
+    """
     parts = target_dir.parts
-    return parts[-3], parts[-2], parts[-1]
+    if parts[-1] == "baseline" or parts[-1] == "example":
+        return parts[-3], parts[-2], parts[-1]
+    else:
+        # e.g. path/rag/chromadb -> provider, variant, (experiment, backend)
+        return parts[-4], parts[-3], (parts[-2], parts[-1])
 
 
 def _classify_error(record: EvaluationRecord) -> str | None:
@@ -240,7 +248,11 @@ def _translate_local(
     )
 
     for provider_key, variant_key, model in enabled:
-        model_target_dir = target_dir / provider_key / variant_key / experiment
+        if experiment == "baseline":
+            model_target_dir = target_dir / provider_key / variant_key / experiment
+        else:
+            model_target_dir = target_dir / provider_key / variant_key / experiment / embedding_backend
+        
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
@@ -362,7 +374,11 @@ def _translate_humaneval_x(
     batch_size = load_eval_config()["translation"]["batch_size"]
 
     for provider_key, variant_key, model in enabled:
-        model_target_dir = target_dir / provider_key / variant_key / experiment
+        if experiment == "baseline":
+            model_target_dir = target_dir / provider_key / variant_key / experiment
+        else:
+            model_target_dir = target_dir / provider_key / variant_key / experiment / embedding_backend
+        
         model_target_dir.mkdir(parents=True, exist_ok=True)
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
@@ -487,7 +503,8 @@ def _evaluate_local(
         console.print("[yellow]No Python files found.[/yellow]")
         return
 
-    provider, variant, experiment = _parse_target_path(eval_target_dir)
+    provider, variant, experiment_cfg = _parse_target_path(eval_target_dir)
+    experiment = experiment_cfg if isinstance(experiment_cfg, str) else f"{experiment_cfg[0]}/{experiment_cfg[1]}"
 
     console.print(f"\n[bold blue]── Evaluating (local): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")
@@ -546,7 +563,8 @@ def _evaluate_humaneval_x(
         batch_size = eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
 
-    provider, variant, experiment = _parse_target_path(eval_target_dir)
+    provider, variant, experiment_cfg = _parse_target_path(eval_target_dir)
+    experiment = experiment_cfg if isinstance(experiment_cfg, str) else f"{experiment_cfg[0]}/{experiment_cfg[1]}"
 
     console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")

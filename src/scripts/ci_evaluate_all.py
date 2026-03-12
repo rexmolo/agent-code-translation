@@ -44,10 +44,7 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 def discover_experiment_dirs(root: Path) -> list[tuple[str, str, str, Path]]:
-    """Find all experiment directories: (provider, model, strategy, path).
-
-    Expects structure: root/<provider>/<model>/<strategy>/Go_*.go
-    """
+    """Find all experiment directories: (provider, model, strategy[/backend], path)."""
     experiments: list[tuple[str, str, str, Path]] = []
     if not root.is_dir():
         return experiments
@@ -61,15 +58,31 @@ def discover_experiment_dirs(root: Path) -> list[tuple[str, str, str, Path]]:
             for strategy_dir in sorted(model_dir.iterdir()):
                 if not strategy_dir.is_dir() or strategy_dir.name.startswith("."):
                     continue
-                # Only include if it has Go files
-                go_files = list(strategy_dir.glob("Go_*.go"))
-                if go_files:
+                
+                # Check for Go files at depth 3 (e.g., baseline)
+                go_files_d3 = list(strategy_dir.glob("Go_*.go"))
+                if go_files_d3:
                     experiments.append((
                         provider_dir.name,
                         model_dir.name,
                         strategy_dir.name,
                         strategy_dir,
                     ))
+                else:
+                    # Check for depth 4 (e.g., rag/chromadb)
+                    for backend_dir in sorted(strategy_dir.iterdir()):
+                        if not backend_dir.is_dir() or backend_dir.name.startswith("."):
+                            continue
+                        go_files_d4 = list(backend_dir.glob("Go_*.go"))
+                        if go_files_d4:
+                            strategy_name = f"{strategy_dir.name}/{backend_dir.name}"
+                            experiments.append((
+                                provider_dir.name,
+                                model_dir.name,
+                                strategy_name,
+                                backend_dir,
+                            ))
+
     return experiments
 
 

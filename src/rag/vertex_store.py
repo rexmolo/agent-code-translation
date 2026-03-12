@@ -98,7 +98,7 @@ def get_or_create_endpoint(
     for ep in endpoints:
         if ep.display_name == display_name:
             _console.print(f"  Found existing endpoint: [green]{ep.resource_name}[/green]")
-            return ep
+            return MatchingEngineIndexEndpoint(index_endpoint_name=ep.resource_name)
 
     _console.print(f"  Creating new endpoint [bold]{display_name}[/bold]...")
     endpoint = MatchingEngineIndexEndpoint.create(

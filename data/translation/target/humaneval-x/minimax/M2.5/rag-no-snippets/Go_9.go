@@ -1,0 +1,25 @@
+package main
+
+import "fmt"
+
+func RollingMax(numbers []int) []int {
+	if len(numbers) == 0 {
+		return []int{}
+	}
+
+	runningMax := numbers[0]
+	result := []int{runningMax}
+
+	for i := 1; i < len(numbers); i++ {
+		if numbers[i] > runningMax {
+			runningMax = numbers[i]
+		}
+		result = append(result, runningMax)
+	}
+
+	return result
+}
+
+func main() {
+	fmt.Println(RollingMax([]int{1, 2, 3, 2, 3, 4, 2}))
+}

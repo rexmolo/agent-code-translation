@@ -21,6 +21,18 @@ embedding:
     model: "text-embedding-3-large"
     # Alternatives: "text-embedding-3-small" (cheaper, 1536 dims)
 
+  gemini:
+    # Requires GOOGLE_API_KEY in .env
+    model: "gemini-embedding-001"
+    # Dimensions: 3072 (GA model, replaces legacy text-embedding-004)
+
+# Vertex AI Vector Search configuration (used with Gemini embedding backend)
+vertex_ai:
+  # Reads from env: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION
+  index_display_name: "thesis-rag-index"
+  endpoint_display_name: "thesis-rag-endpoint"
+  dimensions: 3072  # Must match gemini embedding model output
+
 retrieval:
   # Number of results to return per collection
   parallel_corpus_k: 3

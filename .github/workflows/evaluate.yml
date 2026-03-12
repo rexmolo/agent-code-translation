@@ -5,8 +5,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "src/lab/00_get_hands_on/docker_eval.py"
-      - "src/lab/00_get_hands_on/run.py"
+      - "data/translation/target/humaneval-x/**"
+      - "src/core/docker_eval.py"
+      - "src/scripts/ci_evaluate_all.py"
       - "src/data/humaneval_x.py"
 
 concurrency:
@@ -14,47 +15,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  docker-eval-tests:
+  evaluate-all:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
       - name: Install dependencies
         run: uv sync --dev
+
       - name: Pull Go Docker image
         run: docker pull golang:1.26-alpine
-      - name: Run integration tests
-        run: |
-          uv run pytest src/lab/00_get_hands_on/tests/test_docker_eval.py -v \
-            -m "integration" \
-            --tb=short | tee eval-output.txt
-      - name: Format results
+
+      - name: Run evaluation for all experiments
+        run: uv run python src/scripts/ci_evaluate_all.py
+
+      - name: Write job summary
         if: always()
         run: |
-          echo "# HumanEval-X Evaluation Results" > eval-results.md
-          echo "" >> eval-results.md
-          echo "**Run:** ${{ github.run_id }}" >> eval-results.md
-          echo "**Branch:** ${{ github.ref_name }}" >> eval-results.md
-          echo "**Date:** $(date -u '+%Y-%m-%d %H:%M UTC')" >> eval-results.md
-          echo "" >> eval-results.md
-          echo '```' >> eval-results.md
-          cat eval-output.txt >> eval-results.md
-          echo '```' >> eval-results.md
+          if [ -f results/comparison.md ]; then
+            cat results/comparison.md >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: Upload evaluation results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eval-results
-          path: eval-results.md
-      - name: Upload translated Go files
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: translated-go-files
-          path: data/translation/target/
+          path: results/

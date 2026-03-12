@@ -1,0 +1,30 @@
+# Provider and credential configuration.
+#
+# Copy this file to providers.yaml and fill in your credentials:
+#   cp config/providers.yaml.example config/providers.yaml
+#
+# Each provider supports two ways to supply an API key:
+#   api_key:     the key value directly (convenient for local dev)
+#   api_key_env: name of an environment variable that holds the key
+# If both are set, api_key takes precedence.
+
+google:
+  # Standard API key (used when Vertex AI mode is off)
+  # api_key: "your-google-api-key-here"
+  api_key_env: "GOOGLE_API_KEY"
+
+  # Vertex AI mode
+  vertex_ai:
+    enabled_env: "GOOGLE_GENAI_USE_VERTEXAI"   # set to "true" to activate
+    project_env: "GOOGLE_CLOUD_PROJECT"
+    location_env: "GOOGLE_CLOUD_LOCATION"
+    default_location: "us-central1"
+
+minimax:
+  # api_key: "your-minimax-api-key-here"
+  api_key_env: "MINIMAX_API_KEY"
+  base_url: "https://api.minimaxi.com/anthropic"
+
+openai:
+  # api_key: "your-openai-api-key-here"
+  api_key_env: "OPENAI_API_KEY"

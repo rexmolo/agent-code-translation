@@ -72,6 +72,8 @@ def get_or_create_index(
         display_name=display_name,
         dimensions=dimensions,
         approximate_neighbors_count=50,
+        leaf_node_embedding_count=500,
+        leaf_nodes_to_search_percent=7,
         distance_measure_type="COSINE_DISTANCE",
         index_update_method="STREAM_UPDATE",
         shard_size="SHARD_SIZE_SMALL",
@@ -157,7 +159,13 @@ def upsert_datapoints(
     )
     from google.cloud.aiplatform_v1.types.index import IndexDatapoint as IDPType
 
+    import time
+    from google.api_core.exceptions import ResourceExhausted
+
+    # Vertex AI stream updates have strict throughput quotas. Cap batch size.
+    batch_size = min(batch_size, 100)
     total = len(datapoint_ids)
+    
     for start in range(0, total, batch_size):
         end = min(start + batch_size, total)
         datapoints = []
@@ -173,8 +181,21 @@ def upsert_datapoints(
                 ],
             )
             datapoints.append(dp)
-        index.upsert_datapoints(datapoints=datapoints)
-        _console.print(f"    Upserted {end}/{total}")
+            
+        retries = 0
+        while True:
+            try:
+                index.upsert_datapoints(datapoints=datapoints)
+                _console.print(f"    Upserted {end}/{total}")
+                time.sleep(1.0)  # Gentle pause to respect rate limits
+                break
+            except ResourceExhausted as e:
+                retries += 1
+                if retries > 10:
+                    raise e
+                wait_time = 10 * retries
+                _console.print(f"    [yellow]Quota exceeded (429). Waiting {wait_time}s before retrying...[/yellow]")
+                time.sleep(wait_time)
 
 
 # ---------------------------------------------------------------------------

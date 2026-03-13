@@ -110,7 +110,9 @@ uv run python src/scripts/ci_evaluate_all.py
 uv run python src/scripts/ci_evaluate_all.py --batch-size 3
 ```
 
-This script is also integrated into GitHub Actions (`.github/workflows/evaluate.yml`). Whenever Go files in the `data/translation/target/humaneval-x/` directory are pushed to the `main` branch, the workflow will run the evaluation, upload the `results/` folder as an artifact, and attach the comparison table and plot to the GitHub Actions Job Summary.
+This script is also integrated into GitHub Actions (`.github/workflows/evaluate.yml`). Whenever translated code in `data/translation/target/` is pushed to the `main` branch, the workflow runs the evaluation, uploads the `results/` folder as an artifact, and attaches the comparison table and plot to the GitHub Actions Job Summary.
+
+A separate workflow (`.github/workflows/eval-code-check.yml`) runs unit tests for the evaluation infrastructure code (`docker_eval.py`, `ci_evaluate_all.py`, `humaneval_x.py`) whenever those files change, catching bugs before the next evaluation run.
 
 ### Run tests
 
@@ -337,7 +339,7 @@ src/
 │   ├── generate_go_docs.py        # Generate Go std library docs
 │   ├── ingest_rag.py             # Ingest JSONL data into ChromaDB
 │   └── ingest_rag_gemini.py      # Ingest JSONL data into Vertex AI Vector Search
-└── tests/                # All tests (64 test cases)
+└── tests/                # All tests (82 test cases)
 
 data/
 ├── RAG/

@@ -21,7 +21,7 @@ from rich.progress import Progress
 from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
-    PARALLEL_CORPUS_FILE,
+    GRAMMAR_MAPPINGS_FILE,
 )
 from src.rag.embeddings import GeminiEmbeddingFunction, load_rag_config
 from src.rag.vertex_store import (
@@ -59,23 +59,24 @@ def _embed_texts(ef: GeminiEmbeddingFunction, texts: list[str]) -> list[list[flo
     return all_embeddings
 
 
-def ingest_parallel_corpus(index, ef: GeminiEmbeddingFunction):
-    console.print(f"\n[bold]Ingesting parallel corpus[/bold] from {PARALLEL_CORPUS_FILE}")
-    records = _load_jsonl(PARALLEL_CORPUS_FILE)
+def ingest_grammar_mappings(index, ef: GeminiEmbeddingFunction):
+    console.print(f"\n[bold]Ingesting grammar mappings[/bold] from {GRAMMAR_MAPPINGS_FILE}")
+    records = _load_jsonl(GRAMMAR_MAPPINGS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
     ids = []
     documents = []
-    for r in records:
-        ids.append(f"corpus_{r['problem_id']}")
-        documents.append(r["python_code"])
+    for i, r in enumerate(records):
+        ids.append(f"grammar_{r['category']}_{i}")
+        # Embed the category and python pattern together to capture semantic meaning
+        documents.append(f"Category: {r['category']}\n{r['python_pattern']}")
 
     console.print("  Generating Gemini embeddings...")
     embeddings = _embed_texts(ef, documents)
 
     console.print("  Upserting to Vertex AI...")
-    upsert_datapoints(index, ids, embeddings, "parallel_corpus")
-    console.print(f"  [green]Done![/green] Upserted {len(ids)} parallel corpus entries.")
+    upsert_datapoints(index, ids, embeddings, "grammar_mappings")
+    console.print(f"  [green]Done![/green] Upserted {len(ids)} grammar mapping entries.")
 
 
 def ingest_api_mappings(index, ef: GeminiEmbeddingFunction):
@@ -121,7 +122,7 @@ def ingest_go_docs(index, ef: GeminiEmbeddingFunction):
 @click.command()
 @click.option(
     "--collection",
-    type=click.Choice(["parallel_corpus", "api_mappings", "go_docs", "all"]),
+    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "all"]),
     default="all",
     help="Which collection(s) to ingest.",
 )
@@ -141,8 +142,8 @@ def main(collection: str):
     deployed_id = ensure_deployed(index, endpoint)
 
     # Ingest collections
-    if collection in ("parallel_corpus", "all"):
-        ingest_parallel_corpus(index, ef)
+    if collection in ("grammar_mappings", "all"):
+        ingest_grammar_mappings(index, ef)
     if collection in ("api_mappings", "all"):
         ingest_api_mappings(index, ef)
     if collection in ("go_docs", "all"):

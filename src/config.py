@@ -27,7 +27,7 @@ RAG_PROCESSED_DIR = DATA_DIR / "RAG" / "processed"
 ERROR_DB_PATH = DATA_DIR / "errors.db"
 
 # --- RAG ---
-PARALLEL_CORPUS_FILE = RAG_PROCESSED_DIR / "parallel_corpus" / "codeNet" / "python_go_pairs.jsonl"
+GRAMMAR_MAPPINGS_FILE = RAG_PROCESSED_DIR / "grammar_mappings.jsonl"
 API_MAPPINGS_FILE = RAG_PROCESSED_DIR / "api_mappings.jsonl"
 GO_DOCS_FILE = RAG_PROCESSED_DIR / "go_docs.jsonl"
 

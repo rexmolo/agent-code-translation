@@ -14,7 +14,7 @@ from rich.progress import Progress
 from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
-    PARALLEL_CORPUS_FILE,
+    GRAMMAR_MAPPINGS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
 from src.rag.store import get_chroma_client, get_or_create_collection
@@ -48,28 +48,25 @@ def _upsert_batched(collection, ids, documents, metadatas):
             progress.update(task, advance=end - start)
 
 
-def ingest_parallel_corpus(client, ef):
-    console.print(f"\n[bold]Ingesting parallel corpus[/bold] from {PARALLEL_CORPUS_FILE}")
-    records = _load_jsonl(PARALLEL_CORPUS_FILE)
+def ingest_grammar_mappings(client, ef):
+    console.print(f"\n[bold]Ingesting grammar mappings[/bold] from {GRAMMAR_MAPPINGS_FILE}")
+    records = _load_jsonl(GRAMMAR_MAPPINGS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
-    collection = get_or_create_collection(client, "parallel_corpus", ef)
+    collection = get_or_create_collection(client, "grammar_mappings", ef)
 
     ids = []
     documents = []
     metadatas = []
-    for r in records:
-        doc_id = f"corpus_{r['problem_id']}"
-        go_code = r["go_code"]
-        # Truncate go_code in metadata if too large (ChromaDB limit)
-        if len(go_code) > 8000:
-            go_code = go_code[:8000] + "\n// ... truncated"
+    for i, r in enumerate(records):
+        doc_id = f"grammar_{r['category']}_{i}"
         ids.append(doc_id)
-        documents.append(r["python_code"])
+        documents.append(f"Category: {r['category']}\n{r['python_pattern']}")
         metadatas.append({
-            "problem_id": r["problem_id"],
-            "go_code": go_code,
-            "problem_description": r.get("problem_description", ""),
+            "category": r["category"],
+            "python_pattern": r["python_pattern"],
+            "go_pattern": r["go_pattern"],
+            "description": r["description"],
         })
 
     _upsert_batched(collection, ids, documents, metadatas)
@@ -131,7 +128,7 @@ def ingest_go_docs(client, ef):
 @click.command()
 @click.option(
     "--collection",
-    type=click.Choice(["parallel_corpus", "api_mappings", "go_docs", "all"]),
+    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "all"]),
     default="all",
     help="Which collection(s) to ingest.",
 )
@@ -144,8 +141,8 @@ def main(collection: str):
     ef = get_embedding_function()
     client = get_chroma_client()
 
-    if collection in ("parallel_corpus", "all"):
-        ingest_parallel_corpus(client, ef)
+    if collection in ("grammar_mappings", "all"):
+        ingest_grammar_mappings(client, ef)
     if collection in ("api_mappings", "all"):
         ingest_api_mappings(client, ef)
     if collection in ("go_docs", "all"):

@@ -135,22 +135,22 @@ The system uses RAG to provide the LLM with relevant context before translation:
 
 | Collection | Entries | Description |
 |---|---|---|
-| `parallel_corpus` | 1,668 | Python-Go code pairs from IBM CodeNet (few-shot examples) |
-| `api_mappings` | 180 | Python → Go API equivalences (e.g., `json.loads()` → `json.Unmarshal()`) |
-| `go_docs` | 157 | Go standard library docs + error handling & API sequence patterns |
+| `grammar_mappings` | ~45 | Python-Go structural syntax patterns & paradigms |
+| `api_mappings` | ~190 | Python → Go API equivalences (e.g., `json.loads()` → `json.Unmarshal()`) |
+| `go_docs` | ~165 | Go standard library docs + error handling & API sequence patterns |
 
 ### RAG Pipeline
 
 ```
 Python code
   → tree-sitter extracts API calls + detects try/except
-  → query api_mappings with extracted API names
-  → query go_docs with matched Go APIs + error patterns
-  → query parallel_corpus for similar full examples
+  → query api_mappings (Hybrid) with extracted API names
+  → query go_docs (Hybrid) with matched Go APIs + error patterns
+  → query grammar_mappings (Dense) using raw Python code to find structural idiom mappings
   → formatted context → LLM prompt
 ```
 
-Retrieval uses **Hybrid Search**: BM25 (exact keyword matching, good for API names) + Dense embeddings (semantic similarity), merged with Reciprocal Rank Fusion.
+Retrieval uses **True Hybrid Search** (BM25 exact keyword matching + Dense embeddings for semantic similarity, merged via Reciprocal Rank Fusion) for API mappings and Go docs. The `grammar_mappings` operate via pure **Dense Search** to structurally match Python patterns based on context.
 
 ### Embedding Backends
 
@@ -171,13 +171,15 @@ uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -e rag --
 
 The system supports ablation experiments to measure the contribution of each RAG knowledge base. The experiment name controls which knowledge bases are active — no manual config editing needed.
 
-| Experiment | Code Snippets | API Mappings | Documentation |
+| Experiment | Grammar Mappings | API Mappings | Documentation |
 |---|---|---|---|
 | `baseline` | — | — | — |
 | `rag` | ON | ON | ON |
 | `rag-no-snippets` | OFF | ON | ON |
 | `rag-no-mappings` | ON | OFF | ON |
 | `rag-no-docs` | ON | ON | OFF |
+
+*Note: The `rag-no-snippets` experiment toggle turns off the Grammar Mappings retrieval, retaining the historical "snippets" naming convention in the pipeline configuration.*
 
 Select an experiment via the interactive CLI or the `-e` flag:
 
@@ -234,7 +236,7 @@ embedding:
   provider: "default"   # "default" (free, local), "openai", or "gemini"
 
 knowledge_bases:
-  code_snippets: true    # Parallel corpus (Python-Go translation examples)
+  code_snippets: true    # Grammar mappings (Python-Go structural syntax patterns)
   api_mappings: true     # Python -> Go API equivalences
   documentation: true    # Go standard library docs & patterns
 ```
@@ -344,9 +346,9 @@ src/
 data/
 ├── RAG/
 │   ├── processed/                 # JSONL data for RAG
-│   │   ├── api_mappings.jsonl     # Python→Go API mappings (180 entries)
-│   │   ├── go_docs.jsonl          # Go docs + patterns (157 entries)
-│   │   └── parallel_corpus/       # CodeNet Python-Go pairs (1,668 entries)
+│   │   ├── api_mappings.jsonl     # Python→Go API mappings (~190 entries)
+│   │   ├── go_docs.jsonl          # Go docs + patterns (~165 entries)
+│   │   └── grammar_mappings.jsonl # Python-Go structural patterns (~45 entries)
 └── translation/
     ├── source/           # Python source files (local dataset)
     └── target/           # Translated Go output

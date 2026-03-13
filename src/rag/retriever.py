@@ -22,7 +22,7 @@ from rank_bm25 import BM25Okapi
 from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
-    PARALLEL_CORPUS_FILE,
+    GRAMMAR_MAPPINGS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
 
@@ -56,7 +56,7 @@ def _reciprocal_rank_fusion(
 class HybridRetriever:
     """Combines ChromaDB dense retrieval with BM25 sparse retrieval."""
 
-    def __init__(self, collection_name: str, documents: list[dict], text_key: str, rrf_k: int = 60):
+    def __init__(self, collection_name: str, documents: list[dict], text_key: str, rrf_k: int = 60, mode: str = "hybrid"):
         from src.rag.store import get_chroma_client, get_or_create_collection
 
         self._ef = get_embedding_function()
@@ -65,6 +65,7 @@ class HybridRetriever:
         self._documents = documents
         self._text_key = text_key
         self._rrf_k = rrf_k
+        self._mode = mode
 
         # Build ID -> document index
         self._id_to_doc: dict[str, dict] = {}
@@ -85,19 +86,30 @@ class HybridRetriever:
         if count == 0:
             return []
 
+        dense_ids = []
+        bm25_ids = []
+
         # Dense retrieval from ChromaDB
-        dense_results = self._collection.query(
-            query_texts=[query], n_results=min(fetch_k, count)
-        )
-        dense_ids = dense_results["ids"][0] if dense_results["ids"] else []
+        if self._mode in ("hybrid", "dense"):
+            dense_results = self._collection.query(
+                query_texts=[query], n_results=min(fetch_k, count)
+            )
+            dense_ids = dense_results["ids"][0] if dense_results["ids"] else []
+
+            if self._mode == "dense":
+                return [self._id_to_doc[doc_id] for doc_id in dense_ids[:n_results] if doc_id in self._id_to_doc]
 
         # BM25 retrieval
-        tokenized_query = _tokenize_code(query)
-        bm25_scores = self._bm25.get_scores(tokenized_query)
-        top_indices = sorted(
-            range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
-        )[:fetch_k]
-        bm25_ids = [self._doc_ids[i] for i in top_indices]
+        if self._mode in ("hybrid", "sparse"):
+            tokenized_query = _tokenize_code(query)
+            bm25_scores = self._bm25.get_scores(tokenized_query)
+            top_indices = sorted(
+                range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
+            )[:fetch_k]
+            bm25_ids = [self._doc_ids[i] for i in top_indices]
+
+            if self._mode == "sparse":
+                return [self._id_to_doc[doc_id] for doc_id in bm25_ids[:n_results] if doc_id in self._id_to_doc]
 
         # Reciprocal Rank Fusion
         merged_ids = _reciprocal_rank_fusion([dense_ids, bm25_ids], k=self._rrf_k)
@@ -112,7 +124,7 @@ class HybridRetriever:
 class VertexAIRetriever:
     """Combines Vertex AI Vector Search dense retrieval with BM25 sparse retrieval."""
 
-    def __init__(self, collection_name: str, documents: list[dict], text_key: str, rrf_k: int = 60):
+    def __init__(self, collection_name: str, documents: list[dict], text_key: str, rrf_k: int = 60, mode: str = "hybrid"):
         from src.rag.embeddings import GeminiEmbeddingFunction
         from src.rag.vertex_store import (
             ensure_deployed,
@@ -125,6 +137,7 @@ class VertexAIRetriever:
         self._ef = GeminiEmbeddingFunction(model_name=model)
         self._collection_name = collection_name
         self._rrf_k = rrf_k
+        self._mode = mode
 
         # Vertex AI resources (lazy, cached at module level)
         self._endpoint = _get_vertex_endpoint()
@@ -147,24 +160,34 @@ class VertexAIRetriever:
         from src.rag.vertex_store import query_neighbors
 
         fetch_k = n_results * 3
+        dense_ids = []
+        bm25_ids = []
 
         # Dense retrieval from Vertex AI
-        query_embedding = self._ef.embed_query(query)
-        dense_ids = query_neighbors(
-            self._endpoint,
-            self._deployed_index_id,
-            query_embedding,
-            n_results=fetch_k,
-            collection_name=self._collection_name,
-        )
+        if self._mode in ("hybrid", "dense"):
+            query_embedding = self._ef.embed_query(query)
+            dense_ids = query_neighbors(
+                self._endpoint,
+                self._deployed_index_id,
+                query_embedding,
+                n_results=fetch_k,
+                collection_name=self._collection_name,
+            )
+
+            if self._mode == "dense":
+                return [self._id_to_doc[doc_id] for doc_id in dense_ids[:n_results] if doc_id in self._id_to_doc]
 
         # BM25 retrieval
-        tokenized_query = _tokenize_code(query)
-        bm25_scores = self._bm25.get_scores(tokenized_query)
-        top_indices = sorted(
-            range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
-        )[:fetch_k]
-        bm25_ids = [self._doc_ids[i] for i in top_indices]
+        if self._mode in ("hybrid", "sparse"):
+            tokenized_query = _tokenize_code(query)
+            bm25_scores = self._bm25.get_scores(tokenized_query)
+            top_indices = sorted(
+                range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True
+            )[:fetch_k]
+            bm25_ids = [self._doc_ids[i] for i in top_indices]
+
+            if self._mode == "sparse":
+                return [self._id_to_doc[doc_id] for doc_id in bm25_ids[:n_results] if doc_id in self._id_to_doc]
 
         # Reciprocal Rank Fusion
         merged_ids = _reciprocal_rank_fusion([dense_ids, bm25_ids], k=self._rrf_k)
@@ -277,6 +300,7 @@ def _make_retriever(
     collection_name: str,
     documents: list[dict],
     text_key: str,
+    mode: str = "hybrid",
 ) -> HybridRetriever | VertexAIRetriever:
     """Create a retriever for the given backend, with caching."""
     cache_key = (backend, collection_name)
@@ -284,28 +308,30 @@ def _make_retriever(
         rrf_k = _cfg()["retrieval"]["rrf_k"]
         if backend == "gemini":
             _retrievers[cache_key] = VertexAIRetriever(
-                collection_name, documents, text_key, rrf_k=rrf_k,
+                collection_name, documents, text_key, rrf_k=rrf_k, mode=mode,
             )
         else:
             _retrievers[cache_key] = HybridRetriever(
-                collection_name, documents, text_key, rrf_k=rrf_k,
+                collection_name, documents, text_key, rrf_k=rrf_k, mode=mode,
             )
     return _retrievers[cache_key]
 
 
-def _get_corpus_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
-    cache_key = (backend, "parallel_corpus")
+def _get_grammar_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
+    cache_key = (backend, "grammar_mappings")
     if cache_key not in _retrievers:
-        records = _load_jsonl(PARALLEL_CORPUS_FILE)
+        records = _load_jsonl(GRAMMAR_MAPPINGS_FILE)
         docs = []
-        for r in records:
+        for i, r in enumerate(records):
             docs.append({
-                "_id": f"corpus_{r['problem_id']}",
-                "python_code": r["python_code"],
-                "go_code": r["go_code"],
-                "problem_description": r.get("problem_description", ""),
+                "_id": f"grammar_{r['category']}_{i}",
+                "text": f"{r['category']}: {r['python_pattern']} -> {r['go_pattern']}. {r['description']}",
+                "category": r["category"],
+                "python_pattern": r["python_pattern"],
+                "go_pattern": r["go_pattern"],
+                "description": r["description"],
             })
-        _retrievers[cache_key] = _make_retriever(backend, "parallel_corpus", docs, "python_code")
+        _retrievers[cache_key] = _make_retriever(backend, "grammar_mappings", docs, "text", mode="hybrid")
     return _retrievers[cache_key]
 
 
@@ -324,7 +350,7 @@ def _get_api_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIR
                 "go_api": r["go_api"],
                 "description": r["description"],
             })
-        _retrievers[cache_key] = _make_retriever(backend, "api_mappings", docs, "text")
+        _retrievers[cache_key] = _make_retriever(backend, "api_mappings", docs, "text", mode="hybrid")
     return _retrievers[cache_key]
 
 
@@ -343,19 +369,19 @@ def _get_godoc_retriever(backend: str = "chromadb") -> HybridRetriever | VertexA
                 "description": r["description"],
                 "example": r.get("example", ""),
             })
-        _retrievers[cache_key] = _make_retriever(backend, "go_docs", docs, "text")
+        _retrievers[cache_key] = _make_retriever(backend, "go_docs", docs, "text", mode="hybrid")
     return _retrievers[cache_key]
 
 
 class RAGResult:
     """Container for RAG retrieval results and the formatted context."""
 
-    __slots__ = ("api_mappings", "documentation", "code_snippets", "context")
+    __slots__ = ("api_mappings", "documentation", "grammar_mappings", "context")
 
     def __init__(self) -> None:
         self.api_mappings: list[dict] = []
         self.documentation: list[dict] = []
-        self.code_snippets: list[dict] = []
+        self.grammar_mappings: list[dict] = []
         self.context: str = ""
 
 
@@ -369,7 +395,7 @@ def build_translation_context(
       1. Extract Python APIs using tree-sitter
       2. Query api_mappings using extracted API names (precise)
       3. Query go_docs using matched Go APIs + error patterns if needed
-      4. Query parallel_corpus for similar full-code examples
+      4. Query grammar_mappings for abstract Python -> Go structural patterns
       5. Format all context for the LLM prompt
 
     Args:
@@ -382,7 +408,7 @@ def build_translation_context(
 
     cfg = _cfg()["retrieval"]
     kb_toggles = _get_kb_toggles()
-    use_code_snippets = kb_toggles.get("code_snippets", True)
+    use_grammar_mappings = kb_toggles.get("code_snippets", True) # Keep using the existing config toggle
     use_api_mappings = kb_toggles.get("api_mappings", True)
     use_documentation = kb_toggles.get("documentation", True)
     sections = []
@@ -430,21 +456,22 @@ def build_translation_context(
                 sections.append("## Go Documentation & Patterns\n" + "\n".join(doc_lines))
     result.documentation = docs
 
-    # Step 4: Query parallel corpus for similar full-code examples
-    similar = []
-    if use_code_snippets:
-        corpus_ret = _get_corpus_retriever(embedding_backend)
-        similar = corpus_ret.retrieve(python_code, n_results=cfg["parallel_corpus_k"])
-        if similar:
+    # Step 4: Query grammar mappings for abstract syntactic rules
+    grammar_matches = []
+    if use_grammar_mappings:
+        grammar_ret = _get_grammar_retriever(embedding_backend)
+        grammar_matches = grammar_ret.retrieve(python_code, n_results=cfg.get("grammar_k", 3))
+        if grammar_matches:
             examples = []
-            for i, s in enumerate(similar, 1):
+            for i, match in enumerate(grammar_matches, 1):
                 examples.append(
-                    f"### Example {i}\n"
-                    f"**Python:**\n```python\n{s['python_code']}\n```\n"
-                    f"**Go:**\n```go\n{s['go_code']}\n```"
+                    f"### Grammar Rule: {match['category']}\n"
+                    f"{match['description']}\n\n"
+                    f"**Python:**\n```python\n{match['python_pattern']}\n```\n"
+                    f"**Go:**\n```go\n{match['go_pattern']}\n```"
                 )
-            sections.append("## Reference Translation Examples\n" + "\n\n".join(examples))
-    result.code_snippets = similar
+            sections.append("## Go Grammar Implementation Patterns\n" + "\n\n".join(examples))
+    result.grammar_mappings = grammar_matches
 
     result.context = "\n\n".join(sections) if sections else ""
     return result

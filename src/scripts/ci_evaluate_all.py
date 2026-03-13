@@ -315,7 +315,7 @@ def main() -> None:
         all_results.append(result_entry)
 
         # Save per-experiment JSON
-        json_name = f"{provider}__{model}__{strategy}.json"
+        json_name = f"{provider}__{model}__{strategy.replace('/', '__')}.json"
         json_path = results_dir / json_name
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(result_entry, f, indent=2, default=str)

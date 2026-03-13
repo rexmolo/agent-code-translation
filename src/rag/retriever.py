@@ -325,13 +325,13 @@ def _get_grammar_retriever(backend: str = "chromadb") -> HybridRetriever | Verte
         for i, r in enumerate(records):
             docs.append({
                 "_id": f"grammar_{r['category']}_{i}",
-                "text": f"{r['category']}: {r['python_pattern']} -> {r['go_pattern']}. {r['description']}",
+                "text": f"Category: {r['category']}\n{r['python_pattern']}",
                 "category": r["category"],
                 "python_pattern": r["python_pattern"],
                 "go_pattern": r["go_pattern"],
                 "description": r["description"],
             })
-        _retrievers[cache_key] = _make_retriever(backend, "grammar_mappings", docs, "text", mode="hybrid")
+        _retrievers[cache_key] = _make_retriever(backend, "grammar_mappings", docs, "text", mode="dense")
     return _retrievers[cache_key]
 
 
@@ -456,11 +456,21 @@ def build_translation_context(
                 sections.append("## Go Documentation & Patterns\n" + "\n".join(doc_lines))
     result.documentation = docs
 
-    # Step 4: Query grammar mappings for abstract syntactic rules
+    # Step 4: Extract grammar patterns via tree-sitter, then dense search per category
     grammar_matches = []
     if use_grammar_mappings:
+        from src.rag.grammar_extractor import extract_grammar_patterns
+
+        grammar_patterns = extract_grammar_patterns(python_code)
         grammar_ret = _get_grammar_retriever(embedding_backend)
-        grammar_matches = grammar_ret.retrieve(python_code, n_results=cfg.get("grammar_k", 3))
+        seen_categories: set[str] = set()
+        for pat in grammar_patterns:
+            query = f"Category: {pat['category']}\n{pat['fragment']}"
+            results = grammar_ret.retrieve(query, n_results=1)
+            for r in results:
+                if r["category"] not in seen_categories:
+                    seen_categories.add(r["category"])
+                    grammar_matches.append(r)
         if grammar_matches:
             examples = []
             for i, match in enumerate(grammar_matches, 1):

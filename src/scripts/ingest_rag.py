@@ -53,6 +53,12 @@ def ingest_grammar_mappings(client, ef):
     records = _load_jsonl(GRAMMAR_MAPPINGS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
+    # Delete stale collection to remove entries from removed categories
+    try:
+        client.delete_collection("grammar_mappings")
+        console.print("  Cleared existing grammar_mappings collection.")
+    except Exception:
+        pass  # Collection doesn't exist yet
     collection = get_or_create_collection(client, "grammar_mappings", ef)
 
     ids = []

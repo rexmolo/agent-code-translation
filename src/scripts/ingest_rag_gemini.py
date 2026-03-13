@@ -68,8 +68,11 @@ def ingest_grammar_mappings(index, ef: GeminiEmbeddingFunction):
     documents = []
     for i, r in enumerate(records):
         ids.append(f"grammar_{r['category']}_{i}")
-        # Embed the category and python pattern together to capture semantic meaning
         documents.append(f"Category: {r['category']}\n{r['python_pattern']}")
+
+    # Note: Vertex AI upsert overwrites existing IDs but does not remove stale ones.
+    # If the index previously had more grammar entries, consider recreating the index
+    # to remove stale datapoints from removed categories.
 
     console.print("  Generating Gemini embeddings...")
     embeddings = _embed_texts(ef, documents)

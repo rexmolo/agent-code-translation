@@ -1,6 +1,9 @@
 package main
 
-import "math"
+import (
+	"fmt"
+	"math"
+)
 
 func HasCloseElements(numbers []float64, threshold float64) bool {
 	for idx, elem := range numbers {
@@ -17,10 +20,11 @@ func HasCloseElements(numbers []float64, threshold float64) bool {
 }
 
 func main() {
-	// Example usage:
-	numbers1 := []float64{1.0, 2.0, 3.0}
-	print(HasCloseElements(numbers1, 0.5)) // false
-	
-	numbers2 := []float64{1.0, 2.8, 3.0, 4.0, 5.0, 2.0}
-	print(HasCloseElements(numbers2, 0.3)) // true
+	// Test case 1: should be false
+	result1 := HasCloseElements([]float64{1.0, 2.0, 3.0}, 0.5)
+	fmt.Println(result1)
+
+	// Test case 2: should be true (2.8 and 3.0 differ by 0.2 < 0.3)
+	result2 := HasCloseElements([]float64{1.0, 2.8, 3.0, 4.0, 5.0, 2.0}, 0.3)
+	fmt.Println(result2)
 }

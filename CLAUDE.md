@@ -19,3 +19,6 @@
 - LLMS: MINIMAX2.5
 - Python package management with UV
 - tree-sitter for code parsing
+
+## rules
+- don't read the files inside .doc folder

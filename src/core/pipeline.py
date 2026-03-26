@@ -21,6 +21,7 @@ from src.config import (
 )
 from src.core import agents as _agents
 from src.core import reporting as _reporting
+from src.core.prompt_builder import PromptBuilder
 from src.core.evaluation import discover_python_files, mirror_path, evaluate_file
 from src.core.error_db import save_error
 from src.core.logger import (
@@ -33,21 +34,21 @@ from src.core.schemas import TranslationResult, EvaluationRecord
 from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars, resolve_provider_api_key
 
 
-def _get_rag_context(
+def _get_rag_result(
     python_code: str,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
-) -> str:
-    """Retrieve RAG context, returning empty string if unavailable or not needed."""
+):
+    """Retrieve RAG result, returning None if unavailable or not needed."""
     if experiment == "baseline":
-        return ""
+        return None
     try:
         from src.rag.retriever import build_translation_context
         rag_result = build_translation_context(python_code, embedding_backend=embedding_backend)
         log_rag_retrieval(rag_result)
-        return rag_result.context
+        return rag_result
     except Exception:
-        return ""
+        return None
 
 
 def _setup_and_display_kb(
@@ -66,14 +67,15 @@ def _setup_and_display_kb(
         return
 
     labels = {
-        "code_snippets": "Code Snippets",
-        "api_mappings": "API Mappings",
-        "documentation": "Documentation",
+        "grammar":         "Grammar Patterns",
+        "parallel_corpus": "Parallel Corpus",
+        "api_mappings":    "API Mappings",
+        "documentation":   "Go Docs",
     }
     parts = []
     for key, label in labels.items():
-        enabled = toggles.get(key, True)
-        tag = f"[green]ON[/green]" if enabled else f"[red]OFF[/red]"
+        enabled = toggles.get(key, False)
+        tag = "[green]ON[/green]" if enabled else "[red]OFF[/red]"
         parts.append(f"{label}: {tag}")
     console.print(f"   RAG: {' | '.join(parts)}")
     backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
@@ -263,20 +265,19 @@ def _translate_local(
         print_lock = threading.Lock()
         records: list[dict] = []
 
+        from src.rag.retriever import get_active_kb_toggles as _get_kb_toggles
+        _kb_toggles = _get_kb_toggles(experiment)
+        _prompt_builder = PromptBuilder()
+
         def _translate_one(py_file: Path) -> dict:
-            translator = _agents.create_translation_agent(model)
+            translator = _agents.create_translation_agent(model, kb_toggles=_kb_toggles)
             log_translation_start(py_file.name, provider_key, variant_key)
             python_code = py_file.read_text(encoding="utf-8")
             target_file = mirror_path(py_file, source_dir, model_target_dir, ".go")
             target_file.parent.mkdir(parents=True, exist_ok=True)
 
-            rag_context = _get_rag_context(python_code, experiment, embedding_backend)
-            prompt = (
-                f"{rag_context}\n\n" if rag_context else ""
-            ) + (
-                f"Translate the following Python code to Go:\n\n"
-                f"```python\n{python_code}\n```"
-            )
+            rag_result = _get_rag_result(python_code, experiment, embedding_backend)
+            prompt = _prompt_builder.build_local(python_code, rag_result=rag_result)
             log_prompt(prompt)
 
             try:
@@ -390,21 +391,21 @@ def _translate_humaneval_x(
         print_lock = threading.Lock()
         records: list[dict] = []
 
+        from src.rag.retriever import get_active_kb_toggles as _get_kb_toggles
+        _kb_toggles = _get_kb_toggles(experiment)
+        _prompt_builder = PromptBuilder()
+
         def _translate_one(pair: dict) -> dict:
-            translator = _agents.create_translation_agent(model)
+            translator = _agents.create_translation_agent(model, kb_toggles=_kb_toggles)
             task_num = pair["task_id"].split("/")[1]
             target_file = model_target_dir / f"Go_{task_num}.go"
             log_translation_start(pair["task_id"], provider_key, variant_key)
 
-            rag_context = _get_rag_context(pair["py_solution"], experiment, embedding_backend)
-            prompt = (
-                f"{rag_context}\n\n" if rag_context else ""
-            ) + (
-                f"Translate the following Python code to Go.\n"
-                f"Use this Go function signature:\n"
-                f"```go\n{pair['declaration']}\n```\n\n"
-                f"Python code:\n"
-                f"```python\n{pair['py_solution']}\n```"
+            rag_result = _get_rag_result(pair["py_solution"], experiment, embedding_backend)
+            prompt = _prompt_builder.build_humaneval_x(
+                pair["py_solution"],
+                go_signature=pair["declaration"],
+                rag_result=rag_result,
             )
             log_prompt(prompt)
 

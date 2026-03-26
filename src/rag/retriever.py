@@ -237,10 +237,10 @@ _kb_overrides: dict[str, bool] | None = None
 
 # Experiment name -> knowledge base toggles
 _EXPERIMENT_KB_PRESETS: dict[str, dict[str, bool]] = {
-    "rag":             {"code_snippets": True,  "api_mappings": True,  "documentation": True},
-    "rag-no-snippets": {"code_snippets": False, "api_mappings": True,  "documentation": True},
-    "rag-no-mappings": {"code_snippets": True,  "api_mappings": False, "documentation": True},
-    "rag-no-docs":     {"code_snippets": True,  "api_mappings": True,  "documentation": False},
+    "rag-pattern-only":     {"grammar": True,  "parallel_corpus": False, "api_mappings": False, "documentation": False},
+    "rag-pattern-samples":  {"grammar": True,  "parallel_corpus": True,  "api_mappings": False, "documentation": False},
+    "rag-pattern-api-docs": {"grammar": True,  "parallel_corpus": False, "api_mappings": True,  "documentation": True},
+    "rag-full":             {"grammar": True,  "parallel_corpus": True,  "api_mappings": True,  "documentation": True},
 }
 
 
@@ -376,12 +376,13 @@ def _get_godoc_retriever(backend: str = "chromadb") -> HybridRetriever | VertexA
 class RAGResult:
     """Container for RAG retrieval results and the formatted context."""
 
-    __slots__ = ("api_mappings", "documentation", "grammar_mappings", "context")
+    __slots__ = ("api_mappings", "documentation", "grammar_mappings", "parallel_corpus", "context")
 
     def __init__(self) -> None:
         self.api_mappings: list[dict] = []
         self.documentation: list[dict] = []
         self.grammar_mappings: list[dict] = []
+        self.parallel_corpus: list[dict] = []
         self.context: str = ""
 
 

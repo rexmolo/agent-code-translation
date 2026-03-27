@@ -22,6 +22,7 @@ from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
     GRAMMAR_MAPPINGS_FILE,
+    PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import GeminiEmbeddingFunction, load_rag_config
 from src.rag.vertex_store import (
@@ -68,7 +69,7 @@ def ingest_grammar_mappings(index, ef: GeminiEmbeddingFunction):
     documents = []
     for i, r in enumerate(records):
         ids.append(f"grammar_{r['category']}_{i}")
-        documents.append(f"Category: {r['category']}\n{r['python_pattern']}")
+        documents.append(r["python_pattern"])
 
     # Note: Vertex AI upsert overwrites existing IDs but does not remove stale ones.
     # If the index previously had more grammar entries, consider recreating the index
@@ -91,8 +92,7 @@ def ingest_api_mappings(index, ef: GeminiEmbeddingFunction):
     documents = []
     for i, r in enumerate(records):
         ids.append(f"api_{r['category']}_{i}")
-        text = f"{r['category']}: {r['python_api']} -> {r['go_api']}. {r['description']}"
-        documents.append(text)
+        documents.append(r["python_api"])
 
     console.print("  Generating Gemini embeddings...")
     embeddings = _embed_texts(ef, documents)
@@ -100,6 +100,25 @@ def ingest_api_mappings(index, ef: GeminiEmbeddingFunction):
     console.print("  Upserting to Vertex AI...")
     upsert_datapoints(index, ids, embeddings, "api_mappings")
     console.print(f"  [green]Done![/green] Upserted {len(ids)} API mapping entries.")
+
+
+def ingest_parallel_corpus(index, ef: GeminiEmbeddingFunction):
+    console.print(f"\n[bold]Ingesting parallel corpus[/bold] from {PARALLEL_CORPUS_FILE}")
+    records = _load_jsonl(PARALLEL_CORPUS_FILE)
+    console.print(f"  Loaded {len(records)} records")
+
+    ids = []
+    documents = []
+    for i, r in enumerate(records):
+        ids.append(f"parallel_{r['problem_id']}_{i}")
+        documents.append(r["python_code"])
+
+    console.print("  Generating Gemini embeddings...")
+    embeddings = _embed_texts(ef, documents)
+
+    console.print("  Upserting to Vertex AI...")
+    upsert_datapoints(index, ids, embeddings, "parallel_corpus")
+    console.print(f"  [green]Done![/green] Upserted {len(ids)} parallel corpus entries.")
 
 
 def ingest_go_docs(index, ef: GeminiEmbeddingFunction):
@@ -125,7 +144,7 @@ def ingest_go_docs(index, ef: GeminiEmbeddingFunction):
 @click.command()
 @click.option(
     "--collection",
-    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "all"]),
+    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "parallel_corpus", "all"]),
     default="all",
     help="Which collection(s) to ingest.",
 )
@@ -151,6 +170,8 @@ def main(collection: str):
         ingest_api_mappings(index, ef)
     if collection in ("go_docs", "all"):
         ingest_go_docs(index, ef)
+    if collection in ("parallel_corpus", "all"):
+        ingest_parallel_corpus(index, ef)
 
     console.print("\n[bold green]All done![/bold green]")
     console.print(f"  Index: {index.resource_name}")

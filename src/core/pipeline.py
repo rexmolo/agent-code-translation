@@ -199,6 +199,7 @@ def translate(
     skip_preflight: bool = False,
     dataset: str = "local",
     sample: int | None = None,
+    problems: list[int] | None = None,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
 ) -> None:
@@ -206,7 +207,7 @@ def translate(
     if dataset == "local":
         _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
+        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, problems=problems, experiment=experiment, embedding_backend=embedding_backend)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -341,6 +342,7 @@ def _translate_humaneval_x(
     target_dir: Path,
     skip_preflight: bool = False,
     sample: int | None = None,
+    problems: list[int] | None = None,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
 ) -> None:
@@ -365,7 +367,10 @@ def _translate_humaneval_x(
     pairs = load_humaneval_x()
     console.print(f"Loaded [bold]{len(pairs)}[/bold] HumanEval-X problems.")
 
-    if sample is not None:
+    if problems is not None:
+        pairs = [p for p in pairs if int(p["task_id"].split("/")[1]) in problems]
+        console.print(f"[dim]Retrying [bold]{len(pairs)}[/bold] specific problem(s): {sorted(problems)}\n[/dim]")
+    elif sample is not None:
         pairs = pairs[:sample]
         console.print(f"[dim]Sample mode: translating [bold]{len(pairs)}[/bold] problem(s).\n[/dim]")
     else:

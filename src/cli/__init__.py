@@ -325,6 +325,10 @@ def cli(ctx):
     help="Translate only the first N items.",
 )
 @click.option(
+    "--problems", type=str, default=None,
+    help="Retry specific problem numbers (comma-separated, e.g. 67,93,116).",
+)
+@click.option(
     "-V", "--verbose", is_flag=True, default=False,
     help="Enable verbose step-by-step logging.",
 )
@@ -333,7 +337,7 @@ def cli(ctx):
     default="chromadb", show_default=True,
     help="Embedding backend for RAG retrieval.",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, verbose, embedding_backend):
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend):
     """Run translation pipeline."""
     if verbose:
         set_verbose(True)
@@ -346,6 +350,8 @@ def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provi
         kwargs["target_dir"] = target_dir
     if sample is not None:
         kwargs["sample"] = sample
+    if problems is not None:
+        kwargs["problems"] = [int(x.strip()) for x in problems.split(",")]
     _pipeline.translate(**kwargs)
 
 

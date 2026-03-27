@@ -1,0 +1,15 @@
+package main
+
+import (
+	"strconv"
+	"strings"
+)
+
+func StringSequence(n int) string {
+	// Create a slice of strings from 0 to n
+	strs := make([]string, n+1)
+	for i := 0; i <= n; i++ {
+		strs[i] = strconv.Itoa(i)
+	}
+	return strings.Join(strs, " ")
+}

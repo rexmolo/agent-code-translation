@@ -5,6 +5,9 @@ Extracts:
 - Attribute chains (e.g., sys.stdin, os.path)
 - API call sequences preserving order (e.g., open -> read -> json.loads)
 - Error handling patterns (try/except blocks)
+
+Type annotation imports (typing, collections.abc, etc.) are excluded from
+query strings since they have no Go API equivalents.
 """
 
 from __future__ import annotations
@@ -14,6 +17,14 @@ from tree_sitter import Language, Parser
 
 _PY_LANGUAGE = Language(tspython.language())
 _PARSER = Parser(_PY_LANGUAGE)
+
+# Modules that are pure type annotations — no Go API equivalent exists.
+_TYPE_ANNOTATION_MODULES = frozenset({
+    "typing",
+    "typing_extensions",
+    "collections.abc",
+    "abc",
+})
 
 
 def _collect_calls(node, calls: list[str]) -> None:
@@ -77,7 +88,7 @@ def extract_api_info(python_code: str) -> dict:
 
     has_error_handling = _has_try_except(root)
 
-    # Deduplicate while preserving order for the query string
+    # Deduplicate calls while preserving order
     seen = set()
     unique_calls = []
     for c in calls:
@@ -85,10 +96,16 @@ def extract_api_info(python_code: str) -> dict:
             seen.add(c)
             unique_calls.append(c)
 
+    # Filter out type annotation imports — they have no Go equivalent
+    query_imports = [
+        imp for imp in imports
+        if imp.split(".")[0] not in _TYPE_ANNOTATION_MODULES
+    ]
+
     return {
         "calls": unique_calls,
         "imports": imports,
         "has_error_handling": has_error_handling,
         "query_apis": " ".join(unique_calls),
-        "query_imports": " ".join(imports),
+        "query_imports": " ".join(query_imports),
     }

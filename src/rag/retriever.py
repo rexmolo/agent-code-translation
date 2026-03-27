@@ -441,10 +441,20 @@ def build_translation_context(
     sections = []
     result = RAGResult()
 
-    # Step A: grammar_mappings
+    # Step A: grammar_mappings — tree-sitter detects which constructs are present,
+    # then query once per detected construct for a precise per-category match.
     if use_grammar:
+        from src.rag.grammar_extractor import extract_grammar_patterns
+
         grammar_ret = _get_grammar_retriever(embedding_backend)
-        grammar_matches = grammar_ret.retrieve(stripped, n_results=cfg["api_mappings_k"])
+        grammar_matches = []
+        seen_categories: set[str] = set()
+        for pat in extract_grammar_patterns(python_code):
+            hits = grammar_ret.retrieve(pat["fragment"], n_results=1)
+            for r in hits:
+                if r["category"] not in seen_categories:
+                    seen_categories.add(r["category"])
+                    grammar_matches.append(r)
         result.grammar_mappings = grammar_matches
         if grammar_matches:
             examples = []
@@ -471,11 +481,19 @@ def build_translation_context(
                 )
             sections.append("## Python-Go Code Pairs\n\n" + "\n\n".join(pairs))
 
-    # Step C: api_mappings
+    # Step C: api_mappings — tree-sitter extracts API calls and imports,
+    # then query with those specific names for a precise match.
     mappings: list[dict] = []
     if use_api:
-        api_ret = _get_api_retriever(embedding_backend)
-        mappings = api_ret.retrieve(stripped, n_results=cfg["api_mappings_k"])
+        from src.rag.api_extractor import extract_api_info
+
+        api_info = extract_api_info(python_code)
+        api_query = api_info["query_apis"]
+        if api_info["query_imports"]:
+            api_query += " " + api_info["query_imports"]
+        if api_query.strip():
+            api_ret = _get_api_retriever(embedding_backend)
+            mappings = api_ret.retrieve(api_query, n_results=cfg["api_mappings_k"])
         result.api_mappings = mappings
         if mappings:
             lines = [

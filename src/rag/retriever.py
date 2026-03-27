@@ -4,12 +4,13 @@ Supports two dense backends:
   - ChromaDB (default): local vector DB with configurable embedding model
   - Gemini: Vertex AI Vector Search with Gemini embeddings
 
-Pipeline (matching thesis design):
-  1. Input: Python code
-  2. Tool 1: Extract Python APIs using tree-sitter
-  3. Tool 2: Query api_mappings for Go equivalents
-  4. Tool 3: Query go_docs for usage of those Go APIs + error patterns
-  5. Output: Combined context for the LLM prompt
+Query pipeline (per translation request):
+  1. strip_python_comments(source)        → stripped_source
+  2. [if A] grammar_mappings.query(stripped_source)   → go_pattern + description
+  3. [if B] parallel_corpus.query(stripped_source)    → python_code + go_code pairs
+  4. [if C] api_mappings.query(stripped_source)       → python_api + go_api + description
+            collect go_api names → go_api_query
+  5. [if C and D] go_docs.query(go_api_query)         → api + description + example
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
     GRAMMAR_MAPPINGS_FILE,
+    PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
 
@@ -30,6 +32,14 @@ from src.rag.embeddings import get_embedding_function, load_rag_config
 def _tokenize_code(text: str) -> list[str]:
     """Tokenize code for BM25: split on whitespace and common delimiters."""
     return [t for t in re.split(r"[\s.,()\[\]{};:=<>+\-*/\"']+", text.lower()) if t]
+
+
+def strip_python_comments(source: str) -> str:
+    """Remove # line comments and triple-quoted docstrings from Python source."""
+    source = re.sub(r'""".*?"""', "", source, flags=re.DOTALL)
+    source = re.sub(r"'''.*?'''", "", source, flags=re.DOTALL)
+    source = re.sub(r"#[^\n]*", "", source)
+    return source.strip()
 
 
 def _load_jsonl(path) -> list[dict]:
@@ -325,13 +335,28 @@ def _get_grammar_retriever(backend: str = "chromadb") -> HybridRetriever | Verte
         for i, r in enumerate(records):
             docs.append({
                 "_id": f"grammar_{r['category']}_{i}",
-                "text": f"Category: {r['category']}\n{r['python_pattern']}",
-                "category": r["category"],
                 "python_pattern": r["python_pattern"],
+                "category": r["category"],
                 "go_pattern": r["go_pattern"],
                 "description": r["description"],
             })
-        _retrievers[cache_key] = _make_retriever(backend, "grammar_mappings", docs, "text", mode="dense")
+        _retrievers[cache_key] = _make_retriever(backend, "grammar_mappings", docs, "python_pattern", mode="dense")
+    return _retrievers[cache_key]
+
+
+def _get_parallel_corpus_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
+    cache_key = (backend, "parallel_corpus")
+    if cache_key not in _retrievers:
+        records = _load_jsonl(PARALLEL_CORPUS_FILE)
+        docs = []
+        for i, r in enumerate(records):
+            docs.append({
+                "_id": f"parallel_{r['problem_id']}_{i}",
+                "python_code": r["python_code"],
+                "go_code": r["go_code"],
+                "problem_description": r.get("problem_description", ""),
+            })
+        _retrievers[cache_key] = _make_retriever(backend, "parallel_corpus", docs, "python_code", mode="dense")
     return _retrievers[cache_key]
 
 
@@ -390,14 +415,14 @@ def build_translation_context(
     python_code: str,
     embedding_backend: str = "chromadb",
 ) -> RAGResult:
-    """Structured RAG pipeline for Python-to-Go translation.
+    """Query pipeline for Python-to-Go translation context.
 
-    Pipeline:
-      1. Extract Python APIs using tree-sitter
-      2. Query api_mappings using extracted API names (precise)
-      3. Query go_docs using matched Go APIs + error patterns if needed
-      4. Query grammar_mappings for abstract Python -> Go structural patterns
-      5. Format all context for the LLM prompt
+    Steps:
+      1. Strip comments from Python source
+      2. [A] Query grammar_mappings with stripped source
+      3. [B] Query parallel_corpus with stripped source
+      4. [C] Query api_mappings with stripped source; collect Go API names
+      5. [C+D] Query go_docs with Go API names from step 4
 
     Args:
         python_code: The source Python code to translate.
@@ -405,84 +430,74 @@ def build_translation_context(
 
     Returns a RAGResult with raw retrieved items and the formatted context string.
     """
-    from src.rag.api_extractor import extract_api_info
-
     cfg = _cfg()["retrieval"]
-    kb_toggles = _get_kb_toggles()
-    use_grammar_mappings = kb_toggles.get("code_snippets", True) # Keep using the existing config toggle
-    use_api_mappings = kb_toggles.get("api_mappings", True)
-    use_documentation = kb_toggles.get("documentation", True)
+    kb = _get_kb_toggles()
+    use_grammar  = kb.get("grammar", False)
+    use_parallel = kb.get("parallel_corpus", False)
+    use_api      = kb.get("api_mappings", False)
+    use_docs     = kb.get("documentation", False)
+
+    stripped = strip_python_comments(python_code)
     sections = []
     result = RAGResult()
 
-    # Step 1: Extract APIs from Python code
-    api_info = extract_api_info(python_code)
-
-    # Step 2: Query api_mappings using extracted API names (not raw code)
-    mappings = []
-    if use_api_mappings:
-        api_ret = _get_api_retriever(embedding_backend)
-        api_query = api_info["query_apis"]
-        if api_info["query_imports"]:
-            api_query += " " + api_info["query_imports"]
-        mappings = api_ret.retrieve(api_query, n_results=cfg["api_mappings_k"]) if api_query.strip() else []
-        result.api_mappings = mappings
-
-        if mappings:
-            mapping_lines = [
-                f"- `{m['python_api']}` -> `{m['go_api']}`: {m['description']}"
-                for m in mappings
-            ]
-            sections.append("## Relevant API Mappings\n" + "\n".join(mapping_lines))
-
-    # Step 3: Query go_docs using Go API names from mappings
-    docs = []
-    if use_documentation:
-        godoc_ret = _get_godoc_retriever(embedding_backend)
-        go_api_query = " ".join(m["go_api"] for m in mappings) if mappings else ""
-
-        # If error handling detected, also search for error patterns
-        if api_info["has_error_handling"]:
-            go_api_query += " error handling pattern try except"
-
-        if go_api_query.strip():
-            docs = godoc_ret.retrieve(go_api_query, n_results=cfg["go_docs_k"])
-            if docs:
-                doc_lines = []
-                for d in docs:
-                    line = f"- **{d['api']}**: {d['description']}"
-                    if d.get("example"):
-                        line += f"\n  ```go\n  {d['example']}\n  ```"
-                    doc_lines.append(line)
-                sections.append("## Go Documentation & Patterns\n" + "\n".join(doc_lines))
-    result.documentation = docs
-
-    # Step 4: Extract grammar patterns via tree-sitter, then dense search per category
-    grammar_matches = []
-    if use_grammar_mappings:
-        from src.rag.grammar_extractor import extract_grammar_patterns
-
-        grammar_patterns = extract_grammar_patterns(python_code)
+    # Step A: grammar_mappings
+    if use_grammar:
         grammar_ret = _get_grammar_retriever(embedding_backend)
-        seen_categories: set[str] = set()
-        for pat in grammar_patterns:
-            query = f"Category: {pat['category']}\n{pat['fragment']}"
-            results = grammar_ret.retrieve(query, n_results=1)
-            for r in results:
-                if r["category"] not in seen_categories:
-                    seen_categories.add(r["category"])
-                    grammar_matches.append(r)
+        grammar_matches = grammar_ret.retrieve(stripped, n_results=cfg["api_mappings_k"])
+        result.grammar_mappings = grammar_matches
         if grammar_matches:
             examples = []
-            for i, match in enumerate(grammar_matches, 1):
+            for match in grammar_matches:
                 examples.append(
-                    f"### Grammar Rule: {match['category']}\n"
+                    f"### {match['category']}\n"
                     f"{match['description']}\n\n"
                     f"**Python:**\n```python\n{match['python_pattern']}\n```\n"
                     f"**Go:**\n```go\n{match['go_pattern']}\n```"
                 )
-            sections.append("## Go Grammar Implementation Patterns\n" + "\n\n".join(examples))
-    result.grammar_mappings = grammar_matches
+            sections.append("## Go Grammar Implementation Patterns\n\n" + "\n\n".join(examples))
+
+    # Step B: parallel_corpus
+    if use_parallel:
+        corpus_ret = _get_parallel_corpus_retriever(embedding_backend)
+        corpus_matches = corpus_ret.retrieve(stripped, n_results=cfg["parallel_corpus_k"])
+        result.parallel_corpus = corpus_matches
+        if corpus_matches:
+            pairs = []
+            for m in corpus_matches:
+                pairs.append(
+                    f"**Python:**\n```python\n{m['python_code']}\n```\n"
+                    f"**Go:**\n```go\n{m['go_code']}\n```"
+                )
+            sections.append("## Python-Go Code Pairs\n\n" + "\n\n".join(pairs))
+
+    # Step C: api_mappings
+    mappings: list[dict] = []
+    if use_api:
+        api_ret = _get_api_retriever(embedding_backend)
+        mappings = api_ret.retrieve(stripped, n_results=cfg["api_mappings_k"])
+        result.api_mappings = mappings
+        if mappings:
+            lines = [
+                f"- `{m['python_api']}` -> `{m['go_api']}`: {m['description']}"
+                for m in mappings
+            ]
+            sections.append("## Relevant API Mappings\n" + "\n".join(lines))
+
+    # Step D: go_docs — bridge query uses Go API names from step C
+    if use_docs and mappings:
+        go_api_query = " ".join(m["go_api"] for m in mappings)
+        godoc_ret = _get_godoc_retriever(embedding_backend)
+        docs = godoc_ret.retrieve(go_api_query, n_results=cfg["go_docs_k"])
+        result.documentation = docs
+        if docs:
+            doc_lines = []
+            for d in docs:
+                line = f"- **{d['api']}**: {d['description']}"
+                if d.get("example"):
+                    line += f"\n  ```go\n  {d['example']}\n  ```"
+                doc_lines.append(line)
+            sections.append("## Go Documentation & Patterns\n" + "\n".join(doc_lines))
 
     result.context = "\n\n".join(sections) if sections else ""
     return result

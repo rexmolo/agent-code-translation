@@ -4,13 +4,17 @@ High-level dispatch functions that coordinate the translation and
 evaluation workflows across datasets (local, HumanEval-X) and models.
 """
 
+import multiprocessing
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from rich.console import Console
+from rich.live import Live
 from rich.progress import Progress
+from rich.table import Table
 
 from src.config import (
     TRANSLATION_SOURCE_DIR,
@@ -82,18 +86,13 @@ def _setup_and_display_kb(
     console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
 
 
-def _parse_target_path(target_dir: Path) -> tuple[str, str, str | tuple[str, str]]:
-    """Extract provider, variant, and experiment/backend from a target directory path.
-    
-    If it's baseline, returns: (provider, variant, "baseline")
-    If it's RAG, returns: (provider, variant, ("rag...", "backend"))
+def _parse_target_path(target_dir: Path) -> tuple[str, str, str]:
+    """Extract provider, variant, and experiment from a target directory path.
+
+    Path structure: .../humaneval-x/<provider>/<variant>/<experiment>
     """
     parts = target_dir.parts
-    if parts[-1] == "baseline" or parts[-1] == "example":
-        return parts[-3], parts[-2], parts[-1]
-    else:
-        # e.g. path/rag/chromadb -> provider, variant, (experiment, backend)
-        return parts[-4], parts[-3], (parts[-2], parts[-1])
+    return parts[-3], parts[-2], parts[-1]
 
 
 def _classify_error(record: EvaluationRecord) -> str | None:
@@ -243,18 +242,17 @@ def _translate_local(
     if sample is not None:
         py_files = py_files[:sample]
 
-    batch_size = load_eval_config()["translation"]["batch_size"]
+    translation_cfg = load_eval_config()["translation"]
+    batch_size = translation_cfg["batch_size"]
+    stagger = translation_cfg.get("thread_stagger_seconds", 1)
 
     console.print(
         f"Found [bold]{len(py_files)}[/bold] Python file(s) to translate.\n"
     )
 
     for provider_key, variant_key, model in enabled:
-        if experiment == "baseline":
-            model_target_dir = target_dir / provider_key / variant_key / experiment
-        else:
-            model_target_dir = target_dir / provider_key / variant_key / experiment / embedding_backend
-        
+        model_target_dir = target_dir / provider_key / variant_key / experiment
+
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
@@ -269,7 +267,8 @@ def _translate_local(
         _kb_toggles = _get_kb_toggles(experiment)
         _prompt_builder = PromptBuilder()
 
-        def _translate_one(py_file: Path) -> dict:
+        def _translate_one(py_file: Path, stagger_delay: float = 0) -> dict:
+            time.sleep(stagger_delay)
             translator = _agents.create_translation_agent(model, kb_toggles=_kb_toggles)
             log_translation_start(py_file.name, provider_key, variant_key)
             python_code = py_file.read_text(encoding="utf-8")
@@ -302,8 +301,8 @@ def _translate_local(
             try:
                 with ThreadPoolExecutor(max_workers=batch_size) as executor:
                     futures = {
-                        executor.submit(_translate_one, py_file): py_file
-                        for py_file in py_files
+                        executor.submit(_translate_one, py_file, (i % batch_size) * stagger): py_file
+                        for i, py_file in enumerate(py_files)
                     }
 
                     for future in as_completed(futures):
@@ -372,14 +371,12 @@ def _translate_humaneval_x(
     else:
         console.print()
 
-    batch_size = load_eval_config()["translation"]["batch_size"]
+    translation_cfg = load_eval_config()["translation"]
+    batch_size = translation_cfg["batch_size"]
+    stagger = translation_cfg.get("thread_stagger_seconds", 1)
 
     for provider_key, variant_key, model in enabled:
-        if experiment == "baseline":
-            model_target_dir = target_dir / provider_key / variant_key / experiment
-        else:
-            model_target_dir = target_dir / provider_key / variant_key / experiment / embedding_backend
-        
+        model_target_dir = target_dir / provider_key / variant_key / experiment
         model_target_dir.mkdir(parents=True, exist_ok=True)
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
@@ -395,7 +392,8 @@ def _translate_humaneval_x(
         _kb_toggles = _get_kb_toggles(experiment)
         _prompt_builder = PromptBuilder()
 
-        def _translate_one(pair: dict) -> dict:
+        def _translate_one(pair: dict, stagger_delay: float = 0) -> dict:
+            time.sleep(stagger_delay)
             translator = _agents.create_translation_agent(model, kb_toggles=_kb_toggles)
             task_num = pair["task_id"].split("/")[1]
             target_file = model_target_dir / f"Go_{task_num}.go"
@@ -431,8 +429,8 @@ def _translate_humaneval_x(
             try:
                 with ThreadPoolExecutor(max_workers=batch_size) as executor:
                     futures = {
-                        executor.submit(_translate_one, pair): pair
-                        for pair in pairs
+                        executor.submit(_translate_one, pair, (i % batch_size) * stagger): pair
+                        for i, pair in enumerate(pairs)
                     }
 
                     for future in as_completed(futures):
@@ -504,8 +502,7 @@ def _evaluate_local(
         console.print("[yellow]No Python files found.[/yellow]")
         return
 
-    provider, variant, experiment_cfg = _parse_target_path(eval_target_dir)
-    experiment = experiment_cfg if isinstance(experiment_cfg, str) else f"{experiment_cfg[0]}/{experiment_cfg[1]}"
+    provider, variant, experiment = _parse_target_path(eval_target_dir)
 
     console.print(f"\n[bold blue]── Evaluating (local): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")
@@ -564,8 +561,7 @@ def _evaluate_humaneval_x(
         batch_size = eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
 
-    provider, variant, experiment_cfg = _parse_target_path(eval_target_dir)
-    experiment = experiment_cfg if isinstance(experiment_cfg, str) else f"{experiment_cfg[0]}/{experiment_cfg[1]}"
+    provider, variant, experiment = _parse_target_path(eval_target_dir)
 
     console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")
@@ -681,3 +677,99 @@ def _evaluate_humaneval_x(
     _reporting.display_per_file_table(records, dataset="humaneval-x")
     summary = _reporting.compute_summary(records, dataset="humaneval-x")
     _reporting.display_summary_table(summary)
+
+
+# ---------------------------------------------------------------------------
+# Parallel experiment runner
+# ---------------------------------------------------------------------------
+
+_ALL_EXPERIMENTS = [
+    "baseline",
+    "rag-pattern-only",
+    "rag-pattern-samples",
+    "rag-pattern-api-docs",
+    "rag-full",
+]
+
+
+def _run_experiment_subprocess(args: tuple) -> None:
+    """Top-level picklable subprocess entry point for run_all_humaneval_x.
+
+    Must be top-level (not nested) so multiprocessing can pickle it.
+    """
+    provider_key, variant_key, experiment, sample, embedding_backend = args
+    from src.providers.registry import enable_model
+    enable_model(provider_key, variant_key)
+    _translate_humaneval_x(
+        HUMANEVAL_X_TARGET_DIR,
+        skip_preflight=True,
+        sample=sample,
+        experiment=experiment,
+        embedding_backend=embedding_backend,
+    )
+
+
+def run_all_humaneval_x(
+    provider_key: str,
+    variant_key: str,
+    mode: str = "smoke",
+    embedding_backend: str = "gemini",
+) -> None:
+    """Run all 5 experiments in parallel — one process per experiment.
+
+    Args:
+        provider_key: Provider identifier (e.g. "minimax").
+        variant_key: Variant identifier (e.g. "M2.5").
+        mode: "smoke" translates 10 files; "full" translates all 164.
+        embedding_backend: "gemini" (Vertex AI) or "chromadb".
+    """
+    sample = 10 if mode == "smoke" else None
+    console = Console()
+
+    # Preflight once in main process
+    from src.providers.registry import enable_model, get_enabled_models
+    enable_model(provider_key, variant_key)
+    enabled = get_enabled_models()
+    console.print(
+        f"\n[bold]run-all: {provider_key}/{variant_key}  mode={mode}  "
+        f"experiments={len(_ALL_EXPERIMENTS)}[/bold]\n"
+    )
+    if not preflight_check(console, enabled):
+        return
+
+    # Spawn one process per experiment
+    processes: dict[str, multiprocessing.Process] = {}
+    for experiment in _ALL_EXPERIMENTS:
+        args = (provider_key, variant_key, experiment, sample, embedding_backend)
+        p = multiprocessing.Process(target=_run_experiment_subprocess, args=(args,))
+        p.start()
+        processes[experiment] = p
+
+    def _make_status_table() -> Table:
+        table = Table(title=f"run-all  {provider_key}/{variant_key}  [{mode}]")
+        table.add_column("Experiment", style="cyan", min_width=24)
+        table.add_column("Status")
+        for exp, p in processes.items():
+            if p.is_alive():
+                status = "[yellow]⟳ Running[/yellow]"
+            elif p.exitcode == 0:
+                status = "[green]✓ Done[/green]"
+            else:
+                status = f"[red]✗ Failed (exit {p.exitcode})[/red]"
+            table.add_row(exp, status)
+        return table
+
+    # Live status loop
+    with Live(_make_status_table(), refresh_per_second=2, console=console) as live:
+        while any(p.is_alive() for p in processes.values()):
+            time.sleep(0.5)
+            live.update(_make_status_table())
+
+    console.print()
+    console.print(_make_status_table())
+
+    failed = [exp for exp, p in processes.items() if p.exitcode != 0]
+    if failed:
+        console.print(f"\n[red]Failed: {', '.join(failed)}[/red]")
+    else:
+        console.print(f"\n[green]All {len(_ALL_EXPERIMENTS)} experiments completed.[/green]")

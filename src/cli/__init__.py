@@ -383,3 +383,22 @@ def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
     if batch_size is not None:
         kwargs["batch_size"] = batch_size
     _pipeline.evaluate(**kwargs)
+
+
+@cli.command("run-all")
+@click.option("-p", "--provider", required=True, help="Provider key (e.g. minimax).")
+@click.option("-v", "--variant", required=True, help="Model variant key (e.g. M2.5).")
+@click.option(
+    "--mode", type=click.Choice(["smoke", "full"]), default="smoke", show_default=True,
+    help="smoke=10 files, full=all 164.",
+)
+@click.option(
+    "--embedding-backend", type=click.Choice(["chromadb", "gemini"]),
+    default="gemini", show_default=True,
+    help="Embedding backend for RAG retrieval.",
+)
+@click.option("--skip-preflight", is_flag=True, default=False, help="Skip preflight checks.")
+def run_all(provider, variant, mode, embedding_backend, skip_preflight):
+    """Run all 5 experiments in parallel (baseline + 4 RAG variants)."""
+    enable_model(provider, variant)
+    _pipeline.run_all_humaneval_x(provider, variant, mode=mode, embedding_backend=embedding_backend)

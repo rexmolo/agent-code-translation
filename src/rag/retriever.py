@@ -99,10 +99,12 @@ class HybridRetriever:
         dense_ids = []
         bm25_ids = []
 
-        # Dense retrieval from ChromaDB
+        # Dense retrieval from ChromaDB — pre-compute embedding to avoid
+        # ChromaDB's internal numpy conversion issues with custom EF
         if self._mode in ("hybrid", "dense"):
+            query_embedding = self._ef([query])[0]
             dense_results = self._collection.query(
-                query_texts=[query], n_results=min(fetch_k, count)
+                query_embeddings=[query_embedding], n_results=min(fetch_k, count)
             )
             dense_ids = dense_results["ids"][0] if dense_results["ids"] else []
 

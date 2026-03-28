@@ -15,6 +15,7 @@ from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
     GRAMMAR_MAPPINGS_FILE,
+    PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
 from src.rag.store import get_chroma_client, get_or_create_collection
@@ -84,6 +85,11 @@ def ingest_api_mappings(client, ef):
     records = _load_jsonl(API_MAPPINGS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
+    try:
+        client.delete_collection("api_mappings")
+        console.print("  Cleared existing api_mappings collection.")
+    except Exception:
+        pass
     collection = get_or_create_collection(client, "api_mappings", ef)
 
     ids = []
@@ -105,11 +111,44 @@ def ingest_api_mappings(client, ef):
     console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
 
 
+def ingest_parallel_corpus(client, ef):
+    console.print(f"\n[bold]Ingesting parallel corpus[/bold] from {PARALLEL_CORPUS_FILE}")
+    records = _load_jsonl(PARALLEL_CORPUS_FILE)
+    console.print(f"  Loaded {len(records)} records")
+
+    try:
+        client.delete_collection("parallel_corpus")
+        console.print("  Cleared existing parallel_corpus collection.")
+    except Exception:
+        pass
+    collection = get_or_create_collection(client, "parallel_corpus", ef)
+
+    ids = []
+    documents = []
+    metadatas = []
+    for i, r in enumerate(records):
+        ids.append(f"parallel_{r['problem_id']}_{i}")
+        documents.append(r["python_code"])
+        metadatas.append({
+            "problem_id": r["problem_id"],
+            "go_code": r["go_code"],
+            "problem_description": r.get("problem_description", ""),
+        })
+
+    _upsert_batched(collection, ids, documents, metadatas)
+    console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
+
+
 def ingest_go_docs(client, ef):
     console.print(f"\n[bold]Ingesting Go docs[/bold] from {GO_DOCS_FILE}")
     records = _load_jsonl(GO_DOCS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
+    try:
+        client.delete_collection("go_docs")
+        console.print("  Cleared existing go_docs collection.")
+    except Exception:
+        pass
     collection = get_or_create_collection(client, "go_docs", ef)
 
     ids = []
@@ -134,12 +173,17 @@ def ingest_go_docs(client, ef):
 @click.command()
 @click.option(
     "--collection",
-    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "all"]),
+    type=click.Choice(["grammar_mappings", "parallel_corpus", "api_mappings", "go_docs", "all"]),
     default="all",
     help="Which collection(s) to ingest.",
 )
 def main(collection: str):
-    """Ingest RAG data sources into ChromaDB."""
+    """Ingest RAG data sources into ChromaDB.
+
+    Embedding provider is controlled by config/rag_config.yaml.
+    Set provider to 'gemini' to use Gemini embeddings (3072 dims) stored in ChromaDB.
+    Set provider to 'default' for local all-MiniLM-L6-v2 (384 dims, no API key).
+    """
     cfg = load_rag_config()
     provider = cfg["embedding"]["provider"]
     console.print(f"Embedding provider: [bold]{provider}[/bold]")
@@ -149,6 +193,8 @@ def main(collection: str):
 
     if collection in ("grammar_mappings", "all"):
         ingest_grammar_mappings(client, ef)
+    if collection in ("parallel_corpus", "all"):
+        ingest_parallel_corpus(client, ef)
     if collection in ("api_mappings", "all"):
         ingest_api_mappings(client, ef)
     if collection in ("go_docs", "all"):

@@ -7,8 +7,8 @@ chromadb:
   port: 8000
 
 embedding:
-  # Provider: "default" (free, local) or "openai" (requires OPENAI_API_KEY)
-  provider: "default"
+  # Provider: "default" (free, local) or "openai" (requires OPENAI_API_KEY) or "gemini" (3072 dims, requires GOOGLE_API_KEY)
+  provider: "gemini"
 
   # Provider-specific settings
   default:

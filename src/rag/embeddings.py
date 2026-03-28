@@ -77,9 +77,20 @@ class GeminiEmbeddingFunction:
         )
         return [e.values for e in result.embeddings]
 
-    def embed_query(self, text: str) -> list[float]:
-        """Embed a single query string."""
-        return self([text])[0]
+    def embed_query(self, text: str | None = None, input=None) -> list[float] | list[list[float]]:
+        """Embed query string(s).
+
+        - Called with `text` (str): single query, returns list[float]. Used by VertexAIRetriever.
+        - Called with `input` (list[str]): batch of queries, returns list[list[float]]. Used by ChromaDB.
+        """
+        if isinstance(input, list):
+            return self(input)
+        query = text if text is not None else input
+        return self([query])[0]
+
+    def name(self) -> str:
+        """ChromaDB embedding function protocol — identifies this function by model name."""
+        return self._model
 
 
 def get_embedding_function(

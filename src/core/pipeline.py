@@ -252,7 +252,12 @@ def _translate_local(
     )
 
     for provider_key, variant_key, model in enabled:
-        model_target_dir = target_dir / provider_key / variant_key / experiment
+        if experiment == "baseline":
+            model_target_dir = target_dir / provider_key / variant_key / experiment
+        elif embedding_backend == "gemini":
+            model_target_dir = target_dir / provider_key / variant_key / "vec-gemini" / experiment
+        else:
+            model_target_dir = target_dir / provider_key / variant_key / "vec-chroma" / experiment
 
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
@@ -381,7 +386,12 @@ def _translate_humaneval_x(
     stagger = translation_cfg.get("thread_stagger_seconds", 1)
 
     for provider_key, variant_key, model in enabled:
-        model_target_dir = target_dir / provider_key / variant_key / experiment
+        if experiment == "baseline":
+            model_target_dir = target_dir / provider_key / variant_key / experiment
+        elif embedding_backend == "gemini":
+            model_target_dir = target_dir / provider_key / variant_key / "vec-gemini" / experiment
+        else:
+            model_target_dir = target_dir / provider_key / variant_key / "vec-chroma" / experiment
         model_target_dir.mkdir(parents=True, exist_ok=True)
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")

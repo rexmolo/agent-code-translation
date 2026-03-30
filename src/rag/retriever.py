@@ -27,6 +27,7 @@ from src.config import (
     PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
+from src.rag.store import collection_name_with_dim
 
 
 def _tokenize_code(text: str) -> list[str]:
@@ -314,7 +315,13 @@ def _make_retriever(
     text_key: str,
     mode: str = "hybrid",
 ) -> HybridRetriever | VertexAIRetriever:
-    """Create a retriever for the given backend, with caching."""
+    """Create a retriever for the given backend, with caching.
+
+    For ChromaDB backend, the collection name is suffixed with the configured
+    embedding dimensions (e.g. ``grammar_mappings_768``).
+    """
+    if backend != "gemini":
+        collection_name = collection_name_with_dim(collection_name)
     cache_key = (backend, collection_name)
     if cache_key not in _retrievers:
         rrf_k = _cfg()["retrieval"]["rrf_k"]
@@ -330,7 +337,8 @@ def _make_retriever(
 
 
 def _get_grammar_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
-    cache_key = (backend, "grammar_mappings")
+    name = "grammar_mappings" if backend == "gemini" else collection_name_with_dim("grammar_mappings")
+    cache_key = (backend, name)
     if cache_key not in _retrievers:
         records = _load_jsonl(GRAMMAR_MAPPINGS_FILE)
         docs = []
@@ -347,7 +355,8 @@ def _get_grammar_retriever(backend: str = "chromadb") -> HybridRetriever | Verte
 
 
 def _get_parallel_corpus_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
-    cache_key = (backend, "parallel_corpus")
+    name = "parallel_corpus" if backend == "gemini" else collection_name_with_dim("parallel_corpus")
+    cache_key = (backend, name)
     if cache_key not in _retrievers:
         records = _load_jsonl(PARALLEL_CORPUS_FILE)
         docs = []
@@ -363,7 +372,8 @@ def _get_parallel_corpus_retriever(backend: str = "chromadb") -> HybridRetriever
 
 
 def _get_api_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
-    cache_key = (backend, "api_mappings")
+    name = "api_mappings" if backend == "gemini" else collection_name_with_dim("api_mappings")
+    cache_key = (backend, name)
     if cache_key not in _retrievers:
         records = _load_jsonl(API_MAPPINGS_FILE)
         docs = []
@@ -382,7 +392,8 @@ def _get_api_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIR
 
 
 def _get_godoc_retriever(backend: str = "chromadb") -> HybridRetriever | VertexAIRetriever:
-    cache_key = (backend, "go_docs")
+    name = "go_docs" if backend == "gemini" else collection_name_with_dim("go_docs")
+    cache_key = (backend, name)
     if cache_key not in _retrievers:
         records = _load_jsonl(GO_DOCS_FILE)
         docs = []

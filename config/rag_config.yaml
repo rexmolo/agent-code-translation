@@ -24,7 +24,9 @@ embedding:
   gemini:
     # Requires GOOGLE_API_KEY in .env
     model: "gemini-embedding-001"
-    # Dimensions: 3072 (GA model, replaces legacy text-embedding-004)
+    # Supported dimensions: 768 (small), 1050/1536 (medium), 3072 (full, default)
+    # Uses Matryoshka Representation Learning — smaller dims need manual normalization.
+    dimensions: 768
 
 # Vertex AI Vector Search configuration (used with Gemini embedding backend)
 vertex_ai:

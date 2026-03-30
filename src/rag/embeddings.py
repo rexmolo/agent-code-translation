@@ -29,7 +29,7 @@ class GeminiEmbeddingFunction:
     interchangeably where needed.
     """
 
-    def __init__(self, model_name: str = "gemini-embedding-001"):
+    def __init__(self, model_name: str = "gemini-embedding-001", dimensions: int | None = None):
         from google import genai
 
         gcfg = _google_cfg()
@@ -66,15 +66,16 @@ class GeminiEmbeddingFunction:
             self._client = genai.Client(api_key=api_key)
 
         self._model = model_name
+        self._dimensions = dimensions
 
     def __call__(self, input: list[str]) -> list[list[float]]:
         """Embed a list of texts, returning a list of float vectors."""
         if not input:
             return []
-        result = self._client.models.embed_content(
-            model=self._model,
-            contents=input,
-        )
+        kwargs: dict = {"model": self._model, "contents": input}
+        if self._dimensions is not None:
+            kwargs["config"] = {"output_dimensionality": self._dimensions}
+        result = self._client.models.embed_content(**kwargs)
         return [e.values for e in result.embeddings]
 
     def embed_query(self, text: str | None = None, input=None) -> list[float] | list[list[float]]:
@@ -95,10 +96,13 @@ class GeminiEmbeddingFunction:
 
 def get_embedding_function(
     provider_override: str | None = None,
+    dimensions_override: int | None = None,
 ) -> embedding_functions.EmbeddingFunction | GeminiEmbeddingFunction:
     """Return the embedding function specified in rag_config.yaml.
 
     If *provider_override* is given, it takes precedence over the YAML config.
+    If *dimensions_override* is given, it takes precedence over the YAML config
+    (only applies to Gemini provider).
     """
     cfg = load_rag_config()
     provider = provider_override or cfg["embedding"]["provider"]
@@ -121,7 +125,9 @@ def get_embedding_function(
         )
 
     if provider == "gemini":
-        model = cfg["embedding"]["gemini"]["model"]
-        return GeminiEmbeddingFunction(model_name=model)
+        gemini_cfg = cfg["embedding"]["gemini"]
+        model = gemini_cfg["model"]
+        dimensions = dimensions_override or gemini_cfg.get("dimensions")
+        return GeminiEmbeddingFunction(model_name=model, dimensions=dimensions)
 
     raise ValueError(f"Unknown embedding provider: {provider}")

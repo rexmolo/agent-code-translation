@@ -18,7 +18,7 @@ from src.config import (
     PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
-from src.rag.store import get_chroma_client, get_or_create_collection
+from src.rag.store import collection_name_with_dim, get_chroma_client, get_or_create_collection
 
 console = Console()
 BATCH_SIZE = 100
@@ -49,18 +49,19 @@ def _upsert_batched(collection, ids, documents, metadatas):
             progress.update(task, advance=end - start)
 
 
-def ingest_grammar_mappings(client, ef):
+def ingest_grammar_mappings(client, ef, dimensions: int | None = None):
+    coll_name = collection_name_with_dim("grammar_mappings", dimensions)
     console.print(f"\n[bold]Ingesting grammar mappings[/bold] from {GRAMMAR_MAPPINGS_FILE}")
     records = _load_jsonl(GRAMMAR_MAPPINGS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
     # Delete stale collection to remove entries from removed categories
     try:
-        client.delete_collection("grammar_mappings")
-        console.print("  Cleared existing grammar_mappings collection.")
+        client.delete_collection(coll_name)
+        console.print(f"  Cleared existing {coll_name} collection.")
     except Exception:
         pass  # Collection doesn't exist yet
-    collection = get_or_create_collection(client, "grammar_mappings", ef)
+    collection = get_or_create_collection(client, coll_name, ef)
 
     ids = []
     documents = []
@@ -80,17 +81,18 @@ def ingest_grammar_mappings(client, ef):
     console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
 
 
-def ingest_api_mappings(client, ef):
+def ingest_api_mappings(client, ef, dimensions: int | None = None):
+    coll_name = collection_name_with_dim("api_mappings", dimensions)
     console.print(f"\n[bold]Ingesting API mappings[/bold] from {API_MAPPINGS_FILE}")
     records = _load_jsonl(API_MAPPINGS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
     try:
-        client.delete_collection("api_mappings")
-        console.print("  Cleared existing api_mappings collection.")
+        client.delete_collection(coll_name)
+        console.print(f"  Cleared existing {coll_name} collection.")
     except Exception:
         pass
-    collection = get_or_create_collection(client, "api_mappings", ef)
+    collection = get_or_create_collection(client, coll_name, ef)
 
     ids = []
     documents = []
@@ -111,17 +113,18 @@ def ingest_api_mappings(client, ef):
     console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
 
 
-def ingest_parallel_corpus(client, ef):
+def ingest_parallel_corpus(client, ef, dimensions: int | None = None):
+    coll_name = collection_name_with_dim("parallel_corpus", dimensions)
     console.print(f"\n[bold]Ingesting parallel corpus[/bold] from {PARALLEL_CORPUS_FILE}")
     records = _load_jsonl(PARALLEL_CORPUS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
     try:
-        client.delete_collection("parallel_corpus")
-        console.print("  Cleared existing parallel_corpus collection.")
+        client.delete_collection(coll_name)
+        console.print(f"  Cleared existing {coll_name} collection.")
     except Exception:
         pass
-    collection = get_or_create_collection(client, "parallel_corpus", ef)
+    collection = get_or_create_collection(client, coll_name, ef)
 
     ids = []
     documents = []
@@ -139,17 +142,18 @@ def ingest_parallel_corpus(client, ef):
     console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
 
 
-def ingest_go_docs(client, ef):
+def ingest_go_docs(client, ef, dimensions: int | None = None):
+    coll_name = collection_name_with_dim("go_docs", dimensions)
     console.print(f"\n[bold]Ingesting Go docs[/bold] from {GO_DOCS_FILE}")
     records = _load_jsonl(GO_DOCS_FILE)
     console.print(f"  Loaded {len(records)} records")
 
     try:
-        client.delete_collection("go_docs")
-        console.print("  Cleared existing go_docs collection.")
+        client.delete_collection(coll_name)
+        console.print(f"  Cleared existing {coll_name} collection.")
     except Exception:
         pass
-    collection = get_or_create_collection(client, "go_docs", ef)
+    collection = get_or_create_collection(client, coll_name, ef)
 
     ids = []
     documents = []
@@ -177,28 +181,40 @@ def ingest_go_docs(client, ef):
     default="all",
     help="Which collection(s) to ingest.",
 )
-def main(collection: str):
+@click.option(
+    "--dimensions",
+    type=int,
+    default=None,
+    help="Override embedding dimensions (Gemini only). Supported: 768, 1050, 1536, 3072. "
+         "Defaults to the value in rag_config.yaml.",
+)
+def main(collection: str, dimensions: int | None):
     """Ingest RAG data sources into ChromaDB.
 
     Embedding provider is controlled by config/rag_config.yaml.
-    Set provider to 'gemini' to use Gemini embeddings (3072 dims) stored in ChromaDB.
+    Set provider to 'gemini' to use Gemini embeddings stored in ChromaDB.
     Set provider to 'default' for local all-MiniLM-L6-v2 (384 dims, no API key).
+
+    Use --dimensions to create separate collections per dimension for ablation
+    experiments (e.g. grammar_mappings_768, grammar_mappings_1536).
     """
     cfg = load_rag_config()
     provider = cfg["embedding"]["provider"]
+    effective_dims = dimensions or cfg["embedding"].get("gemini", {}).get("dimensions", 3072)
     console.print(f"Embedding provider: [bold]{provider}[/bold]")
+    console.print(f"Embedding dimensions: [bold]{effective_dims}[/bold]")
 
-    ef = get_embedding_function()
+    ef = get_embedding_function(dimensions_override=dimensions)
     client = get_chroma_client()
 
     if collection in ("grammar_mappings", "all"):
-        ingest_grammar_mappings(client, ef)
+        ingest_grammar_mappings(client, ef, dimensions)
     if collection in ("parallel_corpus", "all"):
-        ingest_parallel_corpus(client, ef)
+        ingest_parallel_corpus(client, ef, dimensions)
     if collection in ("api_mappings", "all"):
-        ingest_api_mappings(client, ef)
+        ingest_api_mappings(client, ef, dimensions)
     if collection in ("go_docs", "all"):
-        ingest_go_docs(client, ef)
+        ingest_go_docs(client, ef, dimensions)
 
     console.print("\n[bold green]All done![/bold green]")
 

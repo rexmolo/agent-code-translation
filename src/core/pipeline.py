@@ -36,6 +36,14 @@ from src.core.logger import (
 )
 from src.core.schemas import TranslationResult, EvaluationRecord
 from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars, resolve_provider_api_key
+from src.rag.embeddings import load_rag_config
+
+
+def _chroma_backend_label() -> str:
+    """Return the vec-chroma directory name with dimension suffix (e.g. vec-chroma-768)."""
+    cfg = load_rag_config()
+    dims = cfg["embedding"].get("gemini", {}).get("dimensions", 3072)
+    return f"vec-chroma-{dims}"
 
 
 def _get_rag_result(
@@ -257,7 +265,7 @@ def _translate_local(
         elif embedding_backend == "gemini":
             model_target_dir = target_dir / provider_key / variant_key / "vec-gemini" / experiment
         else:
-            model_target_dir = target_dir / provider_key / variant_key / "vec-chroma" / experiment
+            model_target_dir = target_dir / provider_key / variant_key / _chroma_backend_label() / experiment
 
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
@@ -391,7 +399,7 @@ def _translate_humaneval_x(
         elif embedding_backend == "gemini":
             model_target_dir = target_dir / provider_key / variant_key / "vec-gemini" / experiment
         else:
-            model_target_dir = target_dir / provider_key / variant_key / "vec-chroma" / experiment
+            model_target_dir = target_dir / provider_key / variant_key / _chroma_backend_label() / experiment
         model_target_dir.mkdir(parents=True, exist_ok=True)
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")

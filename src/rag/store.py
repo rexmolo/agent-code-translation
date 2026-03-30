@@ -14,6 +14,17 @@ def get_chroma_client() -> chromadb.ClientAPI:
     )
 
 
+def collection_name_with_dim(base_name: str, dimensions: int | None = None) -> str:
+    """Append ``_{dim}`` suffix to a collection name.
+
+    If *dimensions* is None, reads the default from rag_config.yaml (Gemini only).
+    """
+    if dimensions is None:
+        cfg = load_rag_config()
+        dimensions = cfg["embedding"]["gemini"].get("dimensions", 3072)
+    return f"{base_name}_{dimensions}"
+
+
 def get_or_create_collection(
     client: chromadb.ClientAPI,
     name: str,

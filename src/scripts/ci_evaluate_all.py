@@ -248,6 +248,8 @@ def generate_plot(all_results: list[dict], output_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate all HumanEval-X experiments")
     parser.add_argument("--batch-size", type=int, default=None, help="Override parallel batch size")
+    parser.add_argument("--root", type=str, default=None, help="Root directory to search for experiments (default: HUMANEVAL_X_TARGET_DIR)")
+    parser.add_argument("--output-dir", type=str, default=None, help="Directory to save results (default: results/)")
     args = parser.parse_args()
 
     # Load HumanEval-X dataset
@@ -276,10 +278,11 @@ def main() -> None:
     console.print("[green]OK[/green]   Go module cache ready\n")
 
     # Discover experiments
-    experiments = discover_experiment_dirs(HUMANEVAL_X_TARGET_DIR)
+    search_root = Path(args.root) if args.root else HUMANEVAL_X_TARGET_DIR
+    experiments = discover_experiment_dirs(search_root)
     if not experiments:
         console.print("[yellow]No experiment folders found under "
-                       f"{HUMANEVAL_X_TARGET_DIR}[/yellow]")
+                       f"{search_root}[/yellow]")
         sys.exit(0)
 
     console.print(f"Found [bold]{len(experiments)}[/bold] experiment(s):\n")
@@ -289,8 +292,8 @@ def main() -> None:
     console.print()
 
     # Prepare output directory
-    results_dir = PROJECT_ROOT / "results"
-    results_dir.mkdir(exist_ok=True)
+    results_dir = Path(args.output_dir) if args.output_dir else PROJECT_ROOT / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     # Evaluate each experiment
     all_results: list[dict] = []

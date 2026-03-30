@@ -1,0 +1,24 @@
+package main
+
+import "fmt"
+
+func IsHappy(s string) bool {
+	if len(s) < 3 {
+		return false
+	}
+
+	for i := 0; i < len(s)-2; i++ {
+		if s[i] == s[i+1] || s[i+1] == s[i+2] || s[i] == s[i+2] {
+			return false
+		}
+	}
+	return true
+}
+
+func main() {
+	// Test cases
+	testCases := []string{"a", "aa", "abcd", "aabb", "adb", "xyy"}
+	for _, tc := range testCases {
+		fmt.Printf("IsHappy(%s) => %v\n", tc, IsHappy(tc))
+	}
+}

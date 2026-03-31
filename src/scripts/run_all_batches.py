@@ -116,6 +116,7 @@ def run_translate(
     run_id: int,
     dimension: int | None,
     delay: float,
+    sample: int | None = None,
 ) -> bool:
     """Run a single translation experiment via CLI subprocess.
 
@@ -131,8 +132,11 @@ def run_translate(
         "--run", str(run_id),
         "--skip-preflight",
     ]
+    if sample is not None:
+        cmd.extend(["-n", str(sample)])
 
-    log(f"  Translating: {experiment} dim={dimension} run-{run_id} (164 files, {delay}s delay)")
+    n_files = sample or FILES_PER_EXPERIMENT
+    log(f"  Translating: {experiment} dim={dimension} run-{run_id} ({n_files} files, {delay}s delay)")
 
     try:
         result = subprocess.run(
@@ -283,6 +287,7 @@ def print_schedule(
 @click.option("--dry-run", is_flag=True, default=False, help="Print schedule without running.")
 @click.option("--no-baseline", is_flag=True, default=False, help="Skip baseline runs.")
 @click.option("--no-evaluate", is_flag=True, default=False, help="Skip evaluation phase.")
+@click.option("--sample", type=int, default=None, help="Translate only N files per experiment (for smoke testing).")
 def main(
     provider: str,
     variant: str,
@@ -296,6 +301,7 @@ def main(
     dry_run: bool,
     no_baseline: bool,
     no_evaluate: bool,
+    sample: int | None,
 ):
     """Run all experiments in automated batches with rate limit management."""
     dims = [int(d.strip()) for d in dimensions.split(",")]
@@ -345,6 +351,7 @@ def main(
                 run_id=item["run_id"],
                 dimension=item["dimension"],
                 delay=delay,
+                sample=sample,
             )
 
             if success:

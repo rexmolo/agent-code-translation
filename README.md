@@ -92,27 +92,55 @@ Subcommand options for `translate`:
 | `-d`, `--dataset` | Dataset: `local` or `humaneval-x` (default: `local`) |
 | `-p`, `--provider` | Provider key (e.g. `minimax`, `gemini`) |
 | `-v`, `--variant` | Model variant key (e.g. `M2.5`, `2.5_pro`) |
-| `-e`, `--experiment` | Experiment name: `baseline`, `rag`, `rag-no-snippets`, `rag-no-mappings`, `rag-no-docs` (default: `baseline`) |
+| `-e`, `--experiment` | Experiment name: `baseline`, `rag-pattern-only`, `rag-pattern-samples`, `rag-pattern-api-docs`, `rag-full` (default: `baseline`) |
 | `--embedding-backend` | Embedding backend for RAG: `chromadb` (default) or `gemini` (Vertex AI Vector Search) |
 | `-n`, `--sample` | Translate only the first N items |
+| `--run` | Run number for multi-run experiments (e.g. `--run 1`) |
 | `--skip-preflight` | Skip API/environment checks |
 
-### Automated Evaluation (CI)
+### Automated Batch Runner
 
-A headless evaluation script is provided to automatically discover and evaluate all HumanEval-X experiments at once. This script generates a Markdown comparison table and a bar chart plot.
+For multi-run experiments (statistical significance testing), the batch runner translates and evaluates all experiments automatically with rate limit management:
 
 ```bash
-# Evaluate all experiments under data/translation/target/humaneval-x/
-# Creates results/comparison.md, comparison.png, and per-experiment JSON files
-uv run python src/scripts/ci_evaluate_all.py
+# Preview the schedule without running:
+uv run python src/scripts/run_all_batches.py \
+  --provider minimax --variant M2.5 \
+  --dimensions 768,1536,3072 --runs 5 \
+  --embedding-backend chromadb --no-baseline --dry-run
 
-# Reduce parallelism if your machine lacks memory/CPU (default is from config)
-uv run python src/scripts/ci_evaluate_all.py --batch-size 3
+# Run in tmux (recommended — runs unattended for ~35 hours):
+tmux new -s experiments
+uv run python src/scripts/run_all_batches.py \
+  --provider minimax --variant M2.5 \
+  --dimensions 768,1536,3072 --runs 5 \
+  --embedding-backend chromadb --no-baseline \
+  --batch-size 9 --window-hours 5 --delay 3
+# Ctrl+B, D to detach; tmux attach -t experiments to reconnect
 ```
 
-This script is also integrated into GitHub Actions (`.github/workflows/evaluate.yml`). Whenever translated code in `data/translation/target/` is pushed to the `main` branch, the workflow runs the evaluation, uploads the `results/` folder as an artifact, and attaches the comparison table and plot to the GitHub Actions Job Summary.
+Each batch cycle: translates 9 experiments (sequential, 3s delay) → evaluates them locally via Docker → sleeps until the rate limit window resets. State is saved to `batch_state.json` so it resumes from where it left off if interrupted.
 
-A separate workflow (`.github/workflows/eval-code-check.yml`) runs unit tests for the evaluation infrastructure code (`docker_eval.py`, `ci_evaluate_all.py`, `humaneval_x.py`) whenever those files change, catching bugs before the next evaluation run.
+### Statistical Analysis
+
+After multi-run experiments complete, analyze significance across embedding dimensions:
+
+```bash
+# ANOVA + pairwise t-tests on Pass@1
+uv run python src/scripts/analyze_statistics.py
+
+# Analyze Compilation@1 instead
+uv run python src/scripts/analyze_statistics.py --metric compilation_at_1
+```
+
+### Batch Evaluation
+
+A headless evaluation script discovers and evaluates all HumanEval-X experiments at once, generating a Markdown comparison table and bar chart:
+
+```bash
+uv run python src/scripts/ci_evaluate_all.py
+uv run python src/scripts/ci_evaluate_all.py --batch-size 3
+```
 
 ### Run tests
 
@@ -169,31 +197,37 @@ uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -e rag --
 
 ### Ablation Experiments
 
-The system supports ablation experiments to measure the contribution of each RAG knowledge base. The experiment name controls which knowledge bases are active — no manual config editing needed.
+The system supports additive ablation experiments to measure the contribution of each RAG knowledge base component. The experiment name controls which knowledge bases are active — no manual config editing needed.
 
-| Experiment | Grammar Mappings | API Mappings | Documentation |
-|---|---|---|---|
-| `baseline` | — | — | — |
-| `rag` | ON | ON | ON |
-| `rag-no-snippets` | OFF | ON | ON |
-| `rag-no-mappings` | ON | OFF | ON |
-| `rag-no-docs` | ON | ON | OFF |
-
-*Note: The `rag-no-snippets` experiment toggle turns off the Grammar Mappings retrieval, retaining the historical "snippets" naming convention in the pipeline configuration.*
+| Experiment | Grammar | Parallel Corpus | API Mappings | Go Docs |
+|---|---|---|---|---|
+| `baseline` | — | — | — | — |
+| `rag-pattern-only` | ON | OFF | OFF | OFF |
+| `rag-pattern-samples` | ON | ON | OFF | OFF |
+| `rag-pattern-api-docs` | ON | OFF | ON | ON |
+| `rag-full` | ON | ON | ON | ON |
 
 Select an experiment via the interactive CLI or the `-e` flag:
 
 ```bash
-uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-no-snippets -n 10
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-full -n 10
+```
+
+For multi-run experiments, add the `--run` flag:
+
+```bash
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-full --run 1
 ```
 
 Before translation or evaluation, the active KB configuration is displayed:
 
 ```
 ── Model: minimax/M2.5 ──
-   Experiment: rag-no-snippets
-   RAG: Code Snippets: OFF | API Mappings: ON | Documentation: ON
-   Output: data/translation/target/humaneval-x/minimax/M2.5/rag-no-snippets
+   Experiment: rag-full
+   Run: 1
+   RAG: Grammar Patterns: ON | Parallel Corpus: ON | API Mappings: ON | Go Docs: ON
+   Embedding: ChromaDB
+   Output: data/translation/target/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
    Parallel batch size: 5
 ```
 
@@ -336,12 +370,14 @@ src/
 │   ├── store.py          # ChromaDB HttpClient & collection management
 │   └── vertex_store.py   # Vertex AI Vector Search resource management
 ├── scripts/              # One-off data processing scripts
+│   ├── analyze_statistics.py      # ANOVA/t-test analysis of multi-run results
 │   ├── extract_codenet_data.py    # Extract CodeNet parallel corpus
 │   ├── generate_api_mappings.py   # Generate Python→Go API mappings
 │   ├── generate_go_docs.py        # Generate Go std library docs
 │   ├── ingest_rag.py             # Ingest JSONL data into ChromaDB
-│   └── ingest_rag_gemini.py      # Ingest JSONL data into Vertex AI Vector Search
-└── tests/                # All tests (82 test cases)
+│   ├── ingest_rag_gemini.py      # Ingest JSONL data into Vertex AI Vector Search
+│   └── run_all_batches.py        # Automated batch runner with rate limiting
+└── tests/                # All tests
 
 data/
 ├── RAG/
@@ -351,8 +387,9 @@ data/
 │   │   └── grammar_mappings.jsonl # Python-Go structural patterns (~45 entries)
 └── translation/
     ├── source/           # Python source files (local dataset)
-    └── target/           # Translated Go output
-        └── <dataset>/<provider>/<variant>/<experiment>/  # e.g. humaneval-x/minimax/M2.5/rag/
+    └── target/           # Translated Go output (gitignored)
+        ├── <dataset>/<provider>/<variant>/baseline/                          # Baseline (flat)
+        └── <dataset>/<provider>/<variant>/<backend>/run-<N>/<experiment>/    # RAG with multi-run
 ```
 
 ## Design

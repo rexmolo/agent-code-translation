@@ -47,23 +47,6 @@ class TestParseTargetPath:
         assert backend == "vec-chroma-768"
         assert run_id is None
 
-    def test_new_baseline_with_run(self):
-        """New: .../provider/variant/baseline/run-1"""
-        path = Path("/data/humaneval-x/minimax/M2.5/baseline/run-1")
-        provider, variant, experiment, backend, run_id = self.parse(path)
-        assert provider == "minimax"
-        assert variant == "M2.5"
-        assert experiment == "baseline"
-        assert backend is None
-        assert run_id == 1
-
-    def test_new_baseline_with_high_run(self):
-        """New: .../provider/variant/baseline/run-15"""
-        path = Path("/data/humaneval-x/minimax/M2.5/baseline/run-15")
-        provider, variant, experiment, backend, run_id = self.parse(path)
-        assert experiment == "baseline"
-        assert run_id == 15
-
     def test_new_rag_with_run(self):
         """New: .../provider/variant/vec-chroma-768/run-3/rag-full"""
         path = Path("/data/humaneval-x/minimax/M2.5/vec-chroma-768/run-3/rag-full")
@@ -107,14 +90,14 @@ class TestDiscoverRunN:
         for i in range(n):
             (d / f"Go_{i}.go").write_text("package main")
 
-    def test_baseline_run_n(self, tmp_path):
-        """baseline/run-1/ with Go files."""
-        self._make_go_files(tmp_path / "minimax" / "M2.5" / "baseline" / "run-1")
+    def test_baseline_flat(self, tmp_path):
+        """baseline/ with Go files directly (no run-N)."""
+        self._make_go_files(tmp_path / "minimax" / "M2.5" / "baseline")
 
         results = self.discover(tmp_path)
         assert len(results) == 1
         _, _, strategy, path = results[0]
-        assert strategy == "baseline/run-1"
+        assert strategy == "baseline"
 
     def test_rag_run_n(self, tmp_path):
         """vec-chroma-768/run-1/rag-full/ with Go files."""
@@ -142,11 +125,9 @@ class TestDiscoverRunN:
             "vec-chroma-768/run-3/rag-full",
         }
 
-    def test_mixed_legacy_and_run_n(self, tmp_path):
-        """Legacy baseline + new run-N RAG structure."""
-        # Legacy baseline (Go files directly in baseline/)
+    def test_baseline_and_run_n_rag(self, tmp_path):
+        """Flat baseline + run-N RAG structure."""
         self._make_go_files(tmp_path / "minimax" / "M2.5" / "baseline")
-        # New run-N RAG
         self._make_go_files(
             tmp_path / "minimax" / "M2.5" / "vec-chroma-768" / "run-1" / "rag-full"
         )
@@ -277,29 +258,22 @@ class TestBatchRunner:
         self.load_state = load_state
         self.save_state = save_state
 
-    def test_queue_size_with_baseline(self):
-        queue = self.build_queue([768, 3072], runs=3, include_baseline=True)
-        # 3 baseline + 2 dims × 3 runs × 4 experiments = 3 + 24 = 27
-        assert len(queue) == 27
-
     def test_queue_size_without_baseline(self):
         queue = self.build_queue([768, 3072], runs=3, include_baseline=False)
         # 2 dims × 3 runs × 4 experiments = 24
         assert len(queue) == 24
 
-    def test_queue_order_baseline_first(self):
-        queue = self.build_queue([768], runs=2, include_baseline=True)
-        # First items should be baseline
-        assert queue[0]["experiment"] == "baseline"
-        assert queue[1]["experiment"] == "baseline"
+    def test_queue_order_rag_experiments(self):
+        queue = self.build_queue([768], runs=2, include_baseline=False)
+        # First items should be RAG experiments for dim 768
+        assert queue[0]["experiment"] == "rag-pattern-only"
         assert queue[0]["run_id"] == 1
-        assert queue[1]["run_id"] == 2
-        # Then RAG experiments
-        assert queue[2]["experiment"] == "rag-pattern-only"
+        assert queue[0]["dimension"] == 768
 
-    def test_queue_full_65_experiments(self):
-        queue = self.build_queue([768, 1536, 3072], runs=5, include_baseline=True)
-        assert len(queue) == 65
+    def test_queue_full_60_experiments(self):
+        queue = self.build_queue([768, 1536, 3072], runs=5, include_baseline=False)
+        # 3 dims × 5 runs × 4 experiments = 60
+        assert len(queue) == 60
 
     def test_experiment_key_unique(self):
         queue = self.build_queue([768, 3072], runs=2, include_baseline=True)

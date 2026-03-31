@@ -94,13 +94,43 @@ def _setup_and_display_kb(
     console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
 
 
-def _parse_target_path(target_dir: Path) -> tuple[str, str, str]:
-    """Extract provider, variant, and experiment from a target directory path.
+def _parse_target_path(target_dir: Path) -> tuple[str, str, str, str | None, int | None]:
+    """Extract provider, variant, experiment, optional backend, and optional run_id from a target directory path.
 
-    Path structure: .../humaneval-x/<provider>/<variant>/<experiment>
+    Baseline paths:
+        .../humaneval-x/<provider>/<variant>/baseline/run-N
+        .../humaneval-x/<provider>/<variant>/<experiment>              (legacy, no run)
+    RAG paths:
+        .../humaneval-x/<provider>/<variant>/<backend>/run-N/<experiment>
+        .../humaneval-x/<provider>/<variant>/<backend>/<experiment>    (legacy, no run)
     """
     parts = target_dir.parts
-    return parts[-3], parts[-2], parts[-1]
+    last = parts[-1]
+
+    # New format: baseline/run-N → Go files directly in run-N/
+    if last.startswith("run-"):
+        run_id = int(last.split("-", 1)[1])
+        parent = parts[-2]
+        if parent == "baseline":
+            return parts[-4], parts[-3], "baseline", None, run_id
+        # baseline is the only case where run-N is the leaf
+        # For RAG: backend/run-N/experiment — but leaf is experiment, not run-N
+        # This branch handles evaluation pointed directly at a run-N dir (shouldn't happen for RAG)
+        return parts[-4], parts[-3], "baseline", None, run_id
+
+    # Check for run-N in the path (RAG: backend/run-N/experiment)
+    parent = parts[-2]
+    if parent.startswith("run-"):
+        run_id = int(parent.split("-", 1)[1])
+        backend = parts[-3]
+        if backend.startswith("vec-"):
+            return parts[-5], parts[-4], last, backend, run_id
+        return parts[-4], parts[-3], last, None, run_id
+
+    # Legacy paths (no run-N)
+    if parent.startswith("vec-"):
+        return parts[-4], parts[-3], last, parent, None
+    return parts[-3], parts[-2], last, None, None
 
 
 def _classify_error(record: EvaluationRecord) -> str | None:
@@ -210,12 +240,13 @@ def translate(
     problems: list[int] | None = None,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
+    run_id: int | None = None,
 ) -> None:
     """Dispatch translation to the appropriate pipeline based on dataset."""
     if dataset == "local":
         _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, problems=problems, experiment=experiment, embedding_backend=embedding_backend)
+        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, problems=problems, experiment=experiment, embedding_backend=embedding_backend, run_id=run_id)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -358,10 +389,15 @@ def _translate_humaneval_x(
     problems: list[int] | None = None,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
+    run_id: int | None = None,
 ) -> None:
     """Translate HumanEval-X Python problems to Go.
 
-    Output: target/humaneval-x/<provider>/<variant>/<experiment>/Go_<N>.go
+    Output (with run_id):
+        baseline: target/humaneval-x/<provider>/<variant>/baseline/run-<N>/Go_<N>.go
+        RAG:      target/humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/Go_<N>.go
+    Output (without run_id — legacy):
+        target/humaneval-x/<provider>/<variant>/<experiment>/Go_<N>.go
     """
     from src.data.humaneval_x import load_humaneval_x
 
@@ -394,16 +430,29 @@ def _translate_humaneval_x(
     stagger = translation_cfg.get("thread_stagger_seconds", 1)
 
     for provider_key, variant_key, model in enabled:
+        run_segment = f"run-{run_id}" if run_id is not None else None
         if experiment == "baseline":
             model_target_dir = target_dir / provider_key / variant_key / experiment
+            if run_segment:
+                model_target_dir = model_target_dir / run_segment
         elif embedding_backend == "gemini":
-            model_target_dir = target_dir / provider_key / variant_key / "vec-gemini" / experiment
+            backend_dir = target_dir / provider_key / variant_key / "vec-gemini"
+            if run_segment:
+                model_target_dir = backend_dir / run_segment / experiment
+            else:
+                model_target_dir = backend_dir / experiment
         else:
-            model_target_dir = target_dir / provider_key / variant_key / _chroma_backend_label() / experiment
+            backend_dir = target_dir / provider_key / variant_key / _chroma_backend_label()
+            if run_segment:
+                model_target_dir = backend_dir / run_segment / experiment
+            else:
+                model_target_dir = backend_dir / experiment
         model_target_dir.mkdir(parents=True, exist_ok=True)
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
+        if run_id is not None:
+            console.print(f"   Run: {run_id}")
         _setup_and_display_kb(experiment, console, embedding_backend)
         console.print(f"   Output: {model_target_dir}")
         console.print(f"   [dim]Parallel batch size: {batch_size}[/dim]\n")
@@ -525,7 +574,7 @@ def _evaluate_local(
         console.print("[yellow]No Python files found.[/yellow]")
         return
 
-    provider, variant, experiment = _parse_target_path(eval_target_dir)
+    provider, variant, experiment, backend, run_id = _parse_target_path(eval_target_dir)
 
     console.print(f"\n[bold blue]── Evaluating (local): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")
@@ -546,6 +595,17 @@ def _evaluate_local(
     _reporting.display_per_file_table(records)
     summary = _reporting.compute_summary(records)
     _reporting.display_summary_table(summary)
+
+    _log_mlflow_run(
+        provider=provider,
+        variant=variant,
+        experiment=experiment,
+        backend=backend,
+        summary=summary,
+        records=records,
+        target_dir=eval_target_dir,
+        run_id=run_id,
+    )
 
 
 def _evaluate_humaneval_x(
@@ -584,7 +644,7 @@ def _evaluate_humaneval_x(
         batch_size = eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
 
-    provider, variant, experiment = _parse_target_path(eval_target_dir)
+    provider, variant, experiment, backend, run_id = _parse_target_path(eval_target_dir)
 
     console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")
@@ -701,6 +761,96 @@ def _evaluate_humaneval_x(
     summary = _reporting.compute_summary(records, dataset="humaneval-x")
     _reporting.display_summary_table(summary)
 
+    # Log to MLflow
+    _log_mlflow_run(
+        provider=provider,
+        variant=variant,
+        experiment=experiment,
+        backend=backend,
+        summary=summary,
+        records=records,
+        target_dir=eval_target_dir,
+        run_id=run_id,
+    )
+
+
+def _log_mlflow_run(
+    provider: str,
+    variant: str,
+    experiment: str,
+    backend: str | None,
+    summary: dict,
+    records: list[EvaluationRecord],
+    target_dir: Path,
+    run_id: int | None = None,
+) -> None:
+    """Log evaluation results to MLflow."""
+    import mlflow
+    import re
+
+    console = Console()
+
+    # Extract dimensions from backend label (e.g. "vec-chroma-768" -> 768)
+    dims = None
+    if backend and (m := re.search(r"-(\d+)$", backend)):
+        dims = int(m.group(1))
+
+    mlflow.set_experiment("thesis-code-translation")
+
+    run_name = f"{provider}/{variant}"
+    if backend:
+        run_name += f"/{backend}"
+    if run_id is not None:
+        run_name += f"/run-{run_id}"
+    run_name += f"/{experiment}"
+
+    with mlflow.start_run(run_name=run_name):
+        # Parameters
+        params = {
+            "provider": provider,
+            "variant": variant,
+            "experiment": experiment,
+            "dataset": summary.get("dataset", "humaneval-x"),
+        }
+        if backend:
+            params["embedding_backend"] = backend
+        if dims:
+            params["embedding_dimensions"] = dims
+        if run_id is not None:
+            params["run_id"] = run_id
+
+        # Add KB toggles
+        from src.rag.retriever import get_active_kb_toggles
+        toggles = get_active_kb_toggles(experiment)
+        if toggles:
+            for key, enabled in toggles.items():
+                params[f"kb_{key}"] = enabled
+
+        mlflow.log_params(params)
+
+        # Metrics (as percentages for readability)
+        mlflow.log_metrics({
+            "total_files": summary["total_files"],
+            "compilation_at_1": round(summary["compilation_at_1"] * 100, 1),
+            "pass_at_1": round(summary["pass_at_1"] * 100, 1),
+        })
+
+        # Log per-file results as artifact
+        import json
+        artifact_data = {
+            "provider": provider,
+            "model": variant,
+            "strategy": experiment,
+            "backend": backend,
+            "summary": summary,
+            "records": [r.model_dump() for r in records],
+        }
+        artifact_path = target_dir / "mlflow_results.json"
+        artifact_path.write_text(json.dumps(artifact_data, indent=2), encoding="utf-8")
+        mlflow.log_artifact(str(artifact_path))
+
+    console.print(f"\n[bold green]MLflow:[/bold green] Run logged as '{run_name}'")
+
 
 # ---------------------------------------------------------------------------
 # Parallel experiment runner
@@ -720,7 +870,7 @@ def _run_experiment_subprocess(args: tuple) -> None:
 
     Must be top-level (not nested) so multiprocessing can pickle it.
     """
-    provider_key, variant_key, experiment, sample, embedding_backend = args
+    provider_key, variant_key, experiment, sample, embedding_backend, run_id = args
     from src.providers.registry import enable_model
     enable_model(provider_key, variant_key)
     _translate_humaneval_x(
@@ -729,6 +879,7 @@ def _run_experiment_subprocess(args: tuple) -> None:
         sample=sample,
         experiment=experiment,
         embedding_backend=embedding_backend,
+        run_id=run_id,
     )
 
 
@@ -737,6 +888,7 @@ def run_all_humaneval_x(
     variant_key: str,
     mode: str = "smoke",
     embedding_backend: str = "gemini",
+    run_id: int | None = None,
 ) -> None:
     """Run all 5 experiments in parallel — one process per experiment.
 
@@ -745,6 +897,7 @@ def run_all_humaneval_x(
         variant_key: Variant identifier (e.g. "M2.5").
         mode: "smoke" translates 10 files; "full" translates all 164.
         embedding_backend: "gemini" (Vertex AI) or "chromadb".
+        run_id: Optional run number for multi-run experiments.
     """
     sample = 10 if mode == "smoke" else None
     console = Console()
@@ -753,9 +906,10 @@ def run_all_humaneval_x(
     from src.providers.registry import enable_model, get_enabled_models
     enable_model(provider_key, variant_key)
     enabled = get_enabled_models()
+    run_label = f"  run={run_id}" if run_id is not None else ""
     console.print(
         f"\n[bold]run-all: {provider_key}/{variant_key}  mode={mode}  "
-        f"experiments={len(_ALL_EXPERIMENTS)}[/bold]\n"
+        f"experiments={len(_ALL_EXPERIMENTS)}{run_label}[/bold]\n"
     )
     if not preflight_check(console, enabled):
         return
@@ -763,7 +917,7 @@ def run_all_humaneval_x(
     # Spawn one process per experiment
     processes: dict[str, multiprocessing.Process] = {}
     for experiment in _ALL_EXPERIMENTS:
-        args = (provider_key, variant_key, experiment, sample, embedding_backend)
+        args = (provider_key, variant_key, experiment, sample, embedding_backend, run_id)
         p = multiprocessing.Process(target=_run_experiment_subprocess, args=(args,))
         p.start()
         processes[experiment] = p

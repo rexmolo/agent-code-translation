@@ -44,7 +44,14 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 def discover_experiment_dirs(root: Path) -> list[tuple[str, str, str, Path]]:
-    """Find all experiment directories: (provider, model, strategy[/backend], path)."""
+    """Find all experiment directories: (provider, model, strategy[/backend], path).
+
+    Supports both legacy flat structure and new run-N structure:
+        Legacy:  provider/model/baseline/Go_*.go
+        Legacy:  provider/model/vec-chroma-768/rag-full/Go_*.go
+        New:     provider/model/baseline/run-1/Go_*.go
+        New:     provider/model/vec-chroma-768/run-1/rag-full/Go_*.go
+    """
     experiments: list[tuple[str, str, str, Path]] = []
     if not root.is_dir():
         return experiments
@@ -58,8 +65,8 @@ def discover_experiment_dirs(root: Path) -> list[tuple[str, str, str, Path]]:
             for strategy_dir in sorted(model_dir.iterdir()):
                 if not strategy_dir.is_dir() or strategy_dir.name.startswith("."):
                     continue
-                
-                # Check for Go files at depth 3 (e.g., baseline)
+
+                # Check for Go files at depth 3 (legacy: baseline/Go_*.go)
                 go_files_d3 = list(strategy_dir.glob("Go_*.go"))
                 if go_files_d3:
                     experiments.append((
@@ -68,19 +75,48 @@ def discover_experiment_dirs(root: Path) -> list[tuple[str, str, str, Path]]:
                         strategy_dir.name,
                         strategy_dir,
                     ))
-                else:
-                    # Check for depth 4 (e.g., rag/chromadb)
-                    for backend_dir in sorted(strategy_dir.iterdir()):
-                        if not backend_dir.is_dir() or backend_dir.name.startswith("."):
-                            continue
-                        go_files_d4 = list(backend_dir.glob("Go_*.go"))
-                        if go_files_d4:
-                            strategy_name = f"{strategy_dir.name}/{backend_dir.name}"
+                    continue
+
+                for sub_dir in sorted(strategy_dir.iterdir()):
+                    if not sub_dir.is_dir() or sub_dir.name.startswith("."):
+                        continue
+
+                    if sub_dir.name.startswith("run-"):
+                        # New run-N structure
+                        # baseline/run-N/Go_*.go
+                        go_in_run = list(sub_dir.glob("Go_*.go"))
+                        if go_in_run:
+                            strategy_name = f"{strategy_dir.name}/{sub_dir.name}"
                             experiments.append((
                                 provider_dir.name,
                                 model_dir.name,
                                 strategy_name,
-                                backend_dir,
+                                sub_dir,
+                            ))
+                        else:
+                            # backend/run-N/experiment/Go_*.go
+                            for exp_dir in sorted(sub_dir.iterdir()):
+                                if not exp_dir.is_dir() or exp_dir.name.startswith("."):
+                                    continue
+                                go_in_exp = list(exp_dir.glob("Go_*.go"))
+                                if go_in_exp:
+                                    strategy_name = f"{strategy_dir.name}/{sub_dir.name}/{exp_dir.name}"
+                                    experiments.append((
+                                        provider_dir.name,
+                                        model_dir.name,
+                                        strategy_name,
+                                        exp_dir,
+                                    ))
+                    else:
+                        # Legacy depth 4: backend/experiment/Go_*.go
+                        go_files_d4 = list(sub_dir.glob("Go_*.go"))
+                        if go_files_d4:
+                            strategy_name = f"{strategy_dir.name}/{sub_dir.name}"
+                            experiments.append((
+                                provider_dir.name,
+                                model_dir.name,
+                                strategy_name,
+                                sub_dir,
                             ))
 
     return experiments

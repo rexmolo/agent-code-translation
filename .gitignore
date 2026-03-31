@@ -47,9 +47,6 @@ package-lock.json
 
 
 /data/*
-!/data/translation/
-/data/translation/*
-!/data/translation/target/
 src/temp/
 .env
 .env.example

@@ -337,13 +337,19 @@ def cli(ctx):
     default="chromadb", show_default=True,
     help="Embedding backend for RAG retrieval.",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend):
+@click.option(
+    "--run", type=int, default=None,
+    help="Run number for multi-run experiments (e.g. --run 1).",
+)
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend, run):
     """Run translation pipeline."""
     if verbose:
         set_verbose(True)
     if provider and variant:
         enable_model(provider, variant)
     kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment, "embedding_backend": embedding_backend}
+    if run is not None:
+        kwargs["run_id"] = run
     if source_dir is not None:
         kwargs["source_dir"] = source_dir
     if target_dir is not None:
@@ -404,7 +410,8 @@ def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
     help="Embedding backend for RAG retrieval.",
 )
 @click.option("--skip-preflight", is_flag=True, default=False, help="Skip preflight checks.")
-def run_all(provider, variant, mode, embedding_backend, skip_preflight):
+@click.option("--run", type=int, default=None, help="Run number for multi-run experiments.")
+def run_all(provider, variant, mode, embedding_backend, skip_preflight, run):
     """Run all 5 experiments in parallel (baseline + 4 RAG variants)."""
     enable_model(provider, variant)
-    _pipeline.run_all_humaneval_x(provider, variant, mode=mode, embedding_backend=embedding_backend)
+    _pipeline.run_all_humaneval_x(provider, variant, mode=mode, embedding_backend=embedding_backend, run_id=run)

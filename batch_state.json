@@ -1,3 +1,13 @@
 {
-  "completed": []
+  "completed": [
+    "rag-full/dim-768/run-1",
+    "rag-full/dim-768/run-2",
+    "rag-pattern-api-docs/dim-768/run-1",
+    "rag-pattern-api-docs/dim-768/run-2",
+    "rag-pattern-only/dim-768/run-1",
+    "rag-pattern-only/dim-768/run-2",
+    "rag-pattern-only/dim-768/run-3",
+    "rag-pattern-samples/dim-768/run-1",
+    "rag-pattern-samples/dim-768/run-2"
+  ]
 }

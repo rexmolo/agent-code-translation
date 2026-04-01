@@ -99,3 +99,4 @@ Each provider requires one API key env var. All variants under the same provider
 |---|---|---|
 | gemini | `GOOGLE_API_KEY` | Vertex AI: `GOOGLE_GENAI_USE_VERTEXAI` + `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION` |
 | minimax | `MINIMAX_API_KEY` | — |
+| openai | `OPENAI_API_KEY` | — |

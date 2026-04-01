@@ -35,6 +35,12 @@ def _register_defaults() -> None:
             return MiniMax(id=model_id)
         return factory
 
+    def _openai_factory(model_id: str) -> Callable:
+        def factory():
+            from src.providers.openai import GPT
+            return GPT(id=model_id)
+        return factory
+
     def _gemini_factory(model_id: str, location: str | None = None) -> Callable:
         def factory():
             from agno.models.google import Gemini
@@ -83,6 +89,19 @@ def _register_defaults() -> None:
                 "model_id": "gemini-3.1-pro-preview",
                 "label": "Gemini 3.1 Pro Preview",
                 "factory": _gemini_factory("gemini-3.1-pro-preview", location="global"),
+            },
+        },
+    }
+
+    _REGISTRY["openai"] = {
+        "provider_cfg": pcfg["openai"],
+        "env_var": pcfg["openai"].get("api_key_env", ""),
+        "label": "OpenAI",
+        "variants": {
+            "gpt-5.4": {
+                "model_id": "gpt-5.4",
+                "label": "GPT-5.4",
+                "factory": _openai_factory("gpt-5.4"),
             },
         },
     }

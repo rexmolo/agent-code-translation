@@ -32,6 +32,7 @@ from pathlib import Path
 import click
 
 STATE_FILE_DEFAULT = Path(__file__).resolve().parent.parent.parent / "batch_state.json"
+LOG_DIR = Path(__file__).resolve().parent.parent.parent / ".doc" / "Log"
 FILES_PER_EXPERIMENT = 164
 
 RAG_EXPERIMENTS = [
@@ -41,11 +42,25 @@ RAG_EXPERIMENTS = [
     "rag-full",
 ]
 
+_log_file = None
+
+
+def _init_log_file() -> None:
+    """Create a timestamped log file in .doc/Log/."""
+    global _log_file
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _log_file = open(LOG_DIR / f"batch_{ts}.log", "a", encoding="utf-8")
+
 
 def log(msg: str) -> None:
-    """Print timestamped log message."""
+    """Print timestamped log message and write to log file."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{ts}] {msg}", flush=True)
+    line = f"[{ts}] {msg}"
+    print(line, flush=True)
+    if _log_file is not None:
+        _log_file.write(line + "\n")
+        _log_file.flush()
 
 
 def build_experiment_queue(
@@ -132,6 +147,8 @@ def run_translate(
         "--run", str(run_id),
         "--skip-preflight",
     ]
+    if dimension is not None:
+        cmd.extend(["--dimension", str(dimension)])
     if sample is not None:
         cmd.extend(["-n", str(sample)])
 
@@ -157,6 +174,65 @@ def run_translate(
     except Exception as e:
         log(f"  ✗ {experiment} dim={dimension} run-{run_id} error: {e}")
         return False
+
+
+def verify_and_retry(
+    provider: str,
+    variant: str,
+    experiment: str,
+    embedding_backend: str,
+    run_id: int,
+    dimension: int | None,
+    target_dir: Path,
+    expected: int,
+    max_retries: int = 3,
+) -> bool:
+    """Check that all expected Go files exist; retry missing ones.
+
+    Returns True if all files are present after retries.
+    """
+    for attempt in range(1, max_retries + 1):
+        expected_nums = set(range(0, expected))
+        existing = {int(f.stem.split("_")[1]) for f in target_dir.glob("Go_*.go")}
+        missing = sorted(expected_nums - existing)
+        if not missing:
+            return True
+
+        log(f"  ⚠ {len(missing)} missing file(s) in {target_dir.name}: {missing[:10]}{'...' if len(missing) > 10 else ''}")
+        log(f"    Retry {attempt}/{max_retries}: re-translating missing problems")
+
+        problems_str = ",".join(str(n) for n in missing)
+        cmd = [
+            sys.executable, "-m", "src.cli", "translate",
+            "-p", provider,
+            "-v", variant,
+            "--dataset", "humaneval-x",
+            "-e", experiment,
+            "--embedding-backend", embedding_backend,
+            "--run", str(run_id),
+            "--skip-preflight",
+            "--problems", problems_str,
+        ]
+        if dimension is not None:
+            cmd.extend(["--dimension", str(dimension)])
+
+        try:
+            subprocess.run(
+                cmd,
+                cwd=Path(__file__).resolve().parent.parent.parent,
+                capture_output=False,
+                timeout=1800,
+            )
+        except (subprocess.TimeoutExpired, Exception) as e:
+            log(f"    Retry failed: {e}")
+
+    # Final check
+    existing = {int(f.stem.split("_")[1]) for f in target_dir.glob("Go_*.go")}
+    still_missing = sorted(set(range(0, expected)) - existing)
+    if still_missing:
+        log(f"  ✗ Still missing {len(still_missing)} file(s) after {max_retries} retries: {still_missing}")
+        return False
+    return True
 
 
 def get_target_dir(
@@ -304,6 +380,7 @@ def main(
     sample: int | None,
 ):
     """Run all experiments in automated batches with rate limit management."""
+    _init_log_file()
     dims = [int(d.strip()) for d in dimensions.split(",")]
     sf = state_file or STATE_FILE_DEFAULT
 
@@ -362,6 +439,17 @@ def main(
                     embedding_backend=embedding_backend,
                     run_id=item["run_id"],
                     dimension=item["dimension"],
+                )
+                n_expected = sample or FILES_PER_EXPERIMENT
+                verify_and_retry(
+                    provider=provider,
+                    variant=variant,
+                    experiment=item["experiment"],
+                    embedding_backend=embedding_backend,
+                    run_id=item["run_id"],
+                    dimension=item["dimension"],
+                    target_dir=target_dir,
+                    expected=n_expected,
                 )
                 translated_dirs.append((item, target_dir))
 

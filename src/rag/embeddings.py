@@ -10,6 +10,24 @@ import chromadb.utils.embedding_functions as embedding_functions
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "rag_config.yaml"
 
+# Runtime override for embedding dimensions (set via CLI --dimension flag).
+# Each experiment runs as a separate subprocess so this is safe.
+_dimension_override: int | None = None
+
+
+def set_dimension_override(dim: int | None) -> None:
+    """Set a runtime override for embedding dimensions."""
+    global _dimension_override
+    _dimension_override = dim
+
+
+def get_active_dimensions() -> int:
+    """Return the effective embedding dimension (override > config)."""
+    if _dimension_override is not None:
+        return _dimension_override
+    cfg = load_rag_config()
+    return cfg["embedding"]["gemini"].get("dimensions", 3072)
+
 
 def load_rag_config() -> dict:
     with open(_CONFIG_PATH, encoding="utf-8") as f:
@@ -127,7 +145,7 @@ def get_embedding_function(
     if provider == "gemini":
         gemini_cfg = cfg["embedding"]["gemini"]
         model = gemini_cfg["model"]
-        dimensions = dimensions_override or gemini_cfg.get("dimensions")
+        dimensions = dimensions_override or get_active_dimensions()
         return GeminiEmbeddingFunction(model_name=model, dimensions=dimensions)
 
     raise ValueError(f"Unknown embedding provider: {provider}")

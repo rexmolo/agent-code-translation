@@ -2,7 +2,7 @@
 
 import chromadb
 
-from src.rag.embeddings import load_rag_config
+from src.rag.embeddings import get_active_dimensions, load_rag_config
 
 
 def get_chroma_client() -> chromadb.ClientAPI:
@@ -20,8 +20,7 @@ def collection_name_with_dim(base_name: str, dimensions: int | None = None) -> s
     If *dimensions* is None, reads the default from rag_config.yaml (Gemini only).
     """
     if dimensions is None:
-        cfg = load_rag_config()
-        dimensions = cfg["embedding"]["gemini"].get("dimensions", 3072)
+        dimensions = get_active_dimensions()
     return f"{base_name}_{dimensions}"
 
 

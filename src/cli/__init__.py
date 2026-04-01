@@ -341,10 +341,17 @@ def cli(ctx):
     "--run", type=int, default=None,
     help="Run number for multi-run experiments (e.g. --run 1).",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend, run):
+@click.option(
+    "--dimension", type=int, default=None,
+    help="Override embedding dimension (e.g. 768, 1536, 3072).",
+)
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend, run, dimension):
     """Run translation pipeline."""
     if verbose:
         set_verbose(True)
+    if dimension is not None:
+        from src.rag.embeddings import set_dimension_override
+        set_dimension_override(dimension)
     if provider and variant:
         enable_model(provider, variant)
     kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment, "embedding_backend": embedding_backend}

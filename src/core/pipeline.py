@@ -41,9 +41,8 @@ from src.rag.embeddings import load_rag_config
 
 def _chroma_backend_label() -> str:
     """Return the vec-chroma directory name with dimension suffix (e.g. vec-chroma-768)."""
-    cfg = load_rag_config()
-    dims = cfg["embedding"].get("gemini", {}).get("dimensions", 3072)
-    return f"vec-chroma-{dims}"
+    from src.rag.embeddings import get_active_dimensions
+    return f"vec-chroma-{get_active_dimensions()}"
 
 
 def _get_rag_result(

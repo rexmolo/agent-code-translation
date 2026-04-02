@@ -16,6 +16,7 @@ def compute_summary(records: list[EvaluationRecord], dataset: str = "local") -> 
             "total_files": 0,
             "dataset": dataset,
             "compilation_at_1": 0.0,
+            "runs_rate": 0.0,
             "pass_at_1": 0.0,
             "avg_ast_similarity": 0.0,
         }
@@ -26,6 +27,7 @@ def compute_summary(records: list[EvaluationRecord], dataset: str = "local") -> 
         "total_files": total,
         "dataset": dataset,
         "compilation_at_1": sum(r.compiles for r in records) / total,
+        "runs_rate": sum(r.runs_successfully for r in records) / total,
         "pass_at_1": sum(r.pass_at_1 for r in records) / total,
         "avg_ast_similarity": (
             sum(r.ast_similarity for r in records) / total if has_ast else 0.0

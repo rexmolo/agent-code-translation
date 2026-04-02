@@ -215,10 +215,10 @@ def _interactive():
         if "experiment" in sig.parameters:
             _EXPERIMENT_CHOICES = [
                 Choice(title="baseline", value="baseline"),
-                Choice(title="rag", value="rag"),
-                Choice(title="rag-no-snippets", value="rag-no-snippets"),
-                Choice(title="rag-no-mappings", value="rag-no-mappings"),
-                Choice(title="rag-no-docs", value="rag-no-docs"),
+                Choice(title="rag-pattern-only", value="rag-pattern-only"),
+                Choice(title="rag-pattern-samples", value="rag-pattern-samples"),
+                Choice(title="rag-pattern-api-docs", value="rag-pattern-api-docs"),
+                Choice(title="rag-full", value="rag-full"),
                 Choice(title="Custom...", value="_custom"),
             ]
             selected_experiment = _ask_or_abort(questionary.select(

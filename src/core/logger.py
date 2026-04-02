@@ -55,10 +55,18 @@ def log_rag_retrieval(rag_result: object) -> None:
     with _log_lock:
         _console.rule("[bold cyan]RAG Retrieval Details[/bold cyan]")
 
-        # Code Snippets
-        snippets = getattr(rag_result, "code_snippets", [])
-        _console.print(f"  [bold]Code Snippets[/bold] ({len(snippets)} retrieved)")
-        for i, s in enumerate(snippets, 1):
+        # Grammar Mappings
+        grammar = getattr(rag_result, "grammar_mappings", [])
+        _console.print(f"  [bold]Grammar Mappings[/bold] ({len(grammar)} retrieved)")
+        for i, s in enumerate(grammar, 1):
+            _console.print(f"    [{i}] category: {s.get('category', 'N/A')}")
+            _console.print(f"        Python: {s.get('python_pattern', '')[:120]}...")
+            _console.print(f"        Go:     {s.get('go_pattern', '')[:120]}...")
+
+        # Parallel Corpus
+        corpus = getattr(rag_result, "parallel_corpus", [])
+        _console.print(f"  [bold]Parallel Corpus[/bold] ({len(corpus)} retrieved)")
+        for i, s in enumerate(corpus, 1):
             _console.print(f"    [{i}] problem: {s.get('_id', 'N/A')}")
             _console.print(f"        Python: {s.get('python_code', '')[:120]}...")
             _console.print(f"        Go:     {s.get('go_code', '')[:120]}...")

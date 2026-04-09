@@ -11,13 +11,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from pathlib import Path
 
 BASE = Path("data/translation/target/humaneval-x")
+RESULTS_DIR = Path(".doc/memory")
 
 def discover_targets() -> list[Path]:
     """Find all leaf experiment directories that contain Go_*.go files."""
@@ -33,16 +36,21 @@ def run_eval(target: Path, idx: int, total: int) -> tuple[Path, bool, str]:
     print(f"[{idx}/{total}] Starting: {label}", flush=True)
     t0 = time.time()
 
-    result = subprocess.run(
-        [
-            sys.executable, "-m", "src.cli", "evaluate",
-            "-d", "humaneval-x",
-            "--target-dir", str(target),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "src.cli", "evaluate",
+                "-d", "humaneval-x",
+                "--target-dir", str(target),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        elapsed = time.time() - t0
+        print(f"[{idx}/{total}] TIMEOUT ({elapsed:.0f}s): {label}", flush=True)
+        return target, False, ""
 
     elapsed = time.time() - t0
     # Extract metrics from output
@@ -80,6 +88,10 @@ def main():
 
     results = []
     t_start = time.time()
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    results_file = RESULTS_DIR / f"reeval_{ts}.jsonl"
+    results_file.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Results will be saved to: {results_file}\n")
 
     with ThreadPoolExecutor(max_workers=args.parallel) as pool:
         futures = {
@@ -89,11 +101,21 @@ def main():
         for future in as_completed(futures):
             target, success, summary = future.result()
             results.append((target, success, summary))
+            # Write incrementally so partial results survive crashes
+            record = {
+                "target": str(target.relative_to(BASE)),
+                "success": success,
+                "summary": summary.strip(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            with open(results_file, "a") as f:
+                f.write(json.dumps(record) + "\n")
 
     elapsed = time.time() - t_start
     ok = sum(1 for _, s, _ in results if s)
     print(f"\n{'='*60}")
     print(f"Done: {ok}/{len(results)} succeeded in {elapsed/60:.1f} minutes")
+    print(f"Results saved to: {results_file}")
 
     failed = [(t, s) for t, s, _ in results if not s]
     if failed:

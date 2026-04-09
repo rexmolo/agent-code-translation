@@ -15,10 +15,26 @@ Each problem has:
 from __future__ import annotations
 
 
-_HUMANEVAL_X_JSONL = (
+_HUMANEVAL_X_JSONL_REMOTE = (
     "https://huggingface.co/datasets/THUDM/humaneval-x"
     "/resolve/main/data/{lang}/data/humaneval.jsonl"
 )
+
+# Local cache fallback (used when HuggingFace is unavailable)
+_HUMANEVAL_X_JSONL_LOCAL = (
+    "~/.cache/huggingface/hub/datasets--THUDM--humaneval-x"
+    "/snapshots/62c78627f3072a1454fa0cb0184737cafe5e4198"
+    "/data/{lang}/data/humaneval.jsonl"
+)
+
+
+def _resolve_jsonl(lang: str) -> str:
+    """Return remote URL, falling back to local cache if available."""
+    from pathlib import Path
+    local = Path(_HUMANEVAL_X_JSONL_LOCAL.format(lang=lang)).expanduser()
+    if local.exists():
+        return str(local)
+    return _HUMANEVAL_X_JSONL_REMOTE.format(lang=lang)
 
 
 def load_humaneval_x() -> list[dict]:
@@ -34,12 +50,12 @@ def load_humaneval_x() -> list[dict]:
 
     py_ds = load_dataset(
         "json",
-        data_files=_HUMANEVAL_X_JSONL.format(lang="python"),
+        data_files=_resolve_jsonl("python"),
         split="train",
     )
     go_ds = load_dataset(
         "json",
-        data_files=_HUMANEVAL_X_JSONL.format(lang="go"),
+        data_files=_resolve_jsonl("go"),
         split="train",
     )
 

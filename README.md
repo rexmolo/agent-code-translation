@@ -9,7 +9,7 @@ The system translates Python source code into idiomatic Go, then evaluates the r
 - **Local** — custom Python source files in `data/translation/source/`
 - **HumanEval-X** — the multilingual benchmark, evaluated inside Docker containers with `go test` and testify assertions
 
-Multiple LLM providers are supported through a registry (Google Gemini, MiniMax), each with several model variants.
+Multiple LLM providers are supported through a registry (Google Gemini, MiniMax, OpenAI), each with several model variants.
 
 ## Requirements
 
@@ -36,7 +36,7 @@ Credentials are managed in `config/providers.yaml`. Each provider supports two m
 |---|---|---|
 | MiniMax | `api_key` or `MINIMAX_API_KEY` env | Required for MiniMax models |
 | Google Gemini | `api_key` / `GOOGLE_API_KEY` env, or Vertex AI mode | See Vertex AI section below |
-| OpenAI | `api_key` or `OPENAI_API_KEY` env | Only for OpenAI RAG embeddings (optional) |
+| OpenAI | `api_key` or `OPENAI_API_KEY` env | Required for OpenAI/GPT models and OpenAI RAG embeddings |
 
 **Vertex AI mode** (for Google Gemini): If using Vertex AI instead of a standard API key, set the following environment variables and authenticate via `gcloud auth application-default login`:
 
@@ -362,6 +362,7 @@ src/
 │   └── humaneval_x.py    # HumanEval-X loader from HuggingFace datasets
 ├── providers/            # LLM provider adapters
 │   ├── minimax/          # MiniMax (Anthropic-compatible API)
+│   ├── openai/           # OpenAI GPT (via Agno OpenAIChat)
 │   └── registry.py       # Multi-provider model registry with lazy factories
 ├── rag/                  # RAG retrieval system
 │   ├── api_extractor.py  # Tree-sitter Python API/call extraction
@@ -474,13 +475,16 @@ The registry (`providers/registry.py`) uses a **lazy factory pattern**: model co
 providers/
 ├── registry.py          # register(provider, variant, factory)
 │                        # enable_model() / get_enabled_models()
-└── minimax/
-    └── minimax.py       # Custom Anthropic-compatible adapter
+├── minimax/
+│   └── minimax.py       # Custom Anthropic-compatible adapter
+└── openai/
+    └── openai.py        # GPT wrapper (extends Agno OpenAIChat)
 ```
 
 Currently supported:
 - **Google Gemini** — 6 variants (2.5 Flash Lite/Flash/Pro, 3 Flash/Pro Preview, 3.1 Pro Preview)
 - **MiniMax** — 3 variants (M2, M2.1, M2.5) via Anthropic-compatible API
+- **OpenAI** — GPT-5.4 via Agno's built-in OpenAIChat
 
 Adding a new provider requires only registering factory functions — no changes to the translation or evaluation logic.
 

@@ -201,6 +201,10 @@ def build_solution_file(generated_code: str) -> str:
     # Extract function/type/var/const declarations
     declarations = _extract_declarations(generated_code)
 
+    # Filter imports to only those actually used in the declarations.
+    # Stripping func main() can orphan imports that were only used there.
+    imports = [imp for imp in imports if imp.split("/")[-1] + "." in declarations]
+
     lines = ["package main", ""]
     if imports:
         lines.append("import (")

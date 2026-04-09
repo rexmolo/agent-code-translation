@@ -27,10 +27,14 @@ _HUMANEVAL_X_JSONL_LOCAL = (
     "/data/{lang}/data/humaneval.jsonl"
 )
 
+# Backward-compatible alias (tests import this name)
+_HUMANEVAL_X_JSONL = _HUMANEVAL_X_JSONL_REMOTE
+
 
 def _resolve_jsonl(lang: str) -> str:
     """Return remote URL, falling back to local cache if available."""
     from pathlib import Path
+
     local = Path(_HUMANEVAL_X_JSONL_LOCAL.format(lang=lang)).expanduser()
     if local.exists():
         return str(local)
@@ -61,12 +65,14 @@ def load_humaneval_x() -> list[dict]:
 
     pairs = []
     for py_item, go_item in zip(py_ds, go_ds):
-        pairs.append({
-            "task_id": go_item["task_id"],
-            "declaration": go_item["declaration"],
-            "py_declaration": py_item["declaration"],
-            "py_solution": py_item["prompt"] + py_item["canonical_solution"],
-            "go_solution": go_item["prompt"] + go_item["canonical_solution"],
-            "test": go_item["test"],
-        })
+        pairs.append(
+            {
+                "task_id": go_item["task_id"],
+                "declaration": go_item["declaration"],
+                "py_declaration": py_item["declaration"],
+                "py_solution": py_item["prompt"] + py_item["canonical_solution"],
+                "go_solution": go_item["prompt"] + go_item["canonical_solution"],
+                "test": go_item["test"],
+            }
+        )
     return pairs

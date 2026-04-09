@@ -122,13 +122,17 @@ def strip_markdown_fences(code: str) -> str:
     return code
 
 
-def _extract_declarations(code: str) -> str:
-    """Extract everything from generated code except package, imports, and func main."""
+def _extract_declarations(code: str) -> tuple[str, bool]:
+    """Extract everything from generated code except package, imports, and func main.
+
+    Returns (declarations, had_main) where had_main indicates if func main was found and stripped.
+    """
     lines = code.split("\n")
     result = []
     brace_depth = 0
     in_import_block = False
     in_main = False
+    had_main = False
 
     i = 0
     while i < len(lines):
@@ -159,6 +163,7 @@ def _extract_declarations(code: str) -> str:
         # Skip func main()
         if re.match(r"^func\s+main\s*\(", stripped):
             in_main = True
+            had_main = True
             brace_depth = 0
             for ch in line:
                 if ch == "{":
@@ -183,7 +188,7 @@ def _extract_declarations(code: str) -> str:
         result.append(line)
         i += 1
 
-    return "\n".join(result).strip()
+    return "\n".join(result).strip(), had_main
 
 
 def build_solution_file(generated_code: str) -> str:
@@ -199,11 +204,13 @@ def build_solution_file(generated_code: str) -> str:
     imports = _extract_imports(generated_code)
 
     # Extract function/type/var/const declarations
-    declarations = _extract_declarations(generated_code)
+    declarations, had_main = _extract_declarations(generated_code)
 
     # Filter imports to only those actually used in the declarations.
-    # Stripping func main() can orphan imports that were only used there.
-    imports = [imp for imp in imports if imp.split("/")[-1] + "." in declarations]
+    # Only applies when func main() was stripped — otherwise keep all imports
+    # (bare functions without main don't have this orphan problem).
+    if had_main:
+        imports = [imp for imp in imports if imp.split("/")[-1] + "." in declarations]
 
     lines = ["package main", ""]
     if imports:
@@ -292,7 +299,7 @@ def build_combined_source(generated_code: str, test_code: str) -> str:
     Legacy API kept for backward compatibility with existing tests.
     """
     generated_code = strip_markdown_fences(generated_code)
-    extracted_lines = _extract_declarations(generated_code)
+    extracted_lines, _ = _extract_declarations(generated_code)
     combined = _insert_before_main(test_code, extracted_lines)
     return combined
 

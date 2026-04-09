@@ -25,6 +25,7 @@ from src.core.docker_eval import (
 # strip_markdown_fences
 # ---------------------------------------------------------------------------
 
+
 class TestStripMarkdownFences:
     def test_strips_go_fences(self):
         code = "```go\nfunc Add(a, b int) int { return a + b }\n```"
@@ -43,18 +44,19 @@ class TestStripMarkdownFences:
 # _extract_declarations
 # ---------------------------------------------------------------------------
 
+
 class TestExtractDeclarations:
     def test_strips_package_and_imports(self):
         code = (
-            'package main\n'
-            '\n'
+            "package main\n"
+            "\n"
             'import "fmt"\n'
-            '\n'
-            'func Add(a, b int) int {\n'
-            '    return a + b\n'
-            '}'
+            "\n"
+            "func Add(a, b int) int {\n"
+            "    return a + b\n"
+            "}"
         )
-        result = _extract_declarations(code)
+        result, _ = _extract_declarations(code)
         assert "package main" not in result
         assert 'import "fmt"' not in result
         assert "func Add(a, b int) int {" in result
@@ -62,54 +64,54 @@ class TestExtractDeclarations:
 
     def test_strips_import_block(self):
         code = (
-            'package main\n'
-            '\n'
-            'import (\n'
+            "package main\n"
+            "\n"
+            "import (\n"
             '    "fmt"\n'
             '    "strings"\n'
-            ')\n'
-            '\n'
-            'func Hello() string {\n'
+            ")\n"
+            "\n"
+            "func Hello() string {\n"
             '    return "hello"\n'
-            '}'
+            "}"
         )
-        result = _extract_declarations(code)
+        result, _ = _extract_declarations(code)
         assert "import" not in result
         assert "fmt" not in result
         assert "func Hello() string {" in result
 
     def test_strips_func_main(self):
         code = (
-            'package main\n'
-            '\n'
-            'func Add(a, b int) int {\n'
-            '    return a + b\n'
-            '}\n'
-            '\n'
-            'func main() {\n'
-            '    fmt.Println(Add(1, 2))\n'
-            '}'
+            "package main\n"
+            "\n"
+            "func Add(a, b int) int {\n"
+            "    return a + b\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    fmt.Println(Add(1, 2))\n"
+            "}"
         )
-        result = _extract_declarations(code)
+        result, _ = _extract_declarations(code)
         assert "func main()" not in result
         assert "Println" not in result
         assert "func Add(a, b int) int {" in result
 
     def test_preserves_helper_functions(self):
         code = (
-            'package main\n'
-            '\n'
-            'func helper(x int) int { return x * 2 }\n'
-            '\n'
-            'func Solve(n int) int {\n'
-            '    return helper(n) + 1\n'
-            '}\n'
-            '\n'
-            'func main() {\n'
-            '    fmt.Println(Solve(5))\n'
-            '}'
+            "package main\n"
+            "\n"
+            "func helper(x int) int { return x * 2 }\n"
+            "\n"
+            "func Solve(n int) int {\n"
+            "    return helper(n) + 1\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    fmt.Println(Solve(5))\n"
+            "}"
         )
-        result = _extract_declarations(code)
+        result, _ = _extract_declarations(code)
         assert "func helper(x int) int" in result
         assert "func Solve(n int) int {" in result
         assert "func main()" not in result
@@ -117,22 +119,22 @@ class TestExtractDeclarations:
     def test_bare_function_no_package(self):
         """HumanEval-X ground truth format: just imports + function, no package."""
         code = (
-            'import (\n'
+            "import (\n"
             '    "math"\n'
-            ')\n'
-            '\n'
-            'func HasCloseElements(numbers []float64, threshold float64) bool {\n'
-            '    for i := 0; i < len(numbers); i++ {\n'
-            '        for j := i + 1; j < len(numbers); j++ {\n'
-            '            if math.Abs(numbers[i]-numbers[j]) < threshold {\n'
-            '                return true\n'
-            '            }\n'
-            '        }\n'
-            '    }\n'
-            '    return false\n'
-            '}'
+            ")\n"
+            "\n"
+            "func HasCloseElements(numbers []float64, threshold float64) bool {\n"
+            "    for i := 0; i < len(numbers); i++ {\n"
+            "        for j := i + 1; j < len(numbers); j++ {\n"
+            "            if math.Abs(numbers[i]-numbers[j]) < threshold {\n"
+            "                return true\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    return false\n"
+            "}"
         )
-        result = _extract_declarations(code)
+        result, _ = _extract_declarations(code)
         assert "import" not in result
         assert "func HasCloseElements" in result
         assert "return false" in result
@@ -141,6 +143,7 @@ class TestExtractDeclarations:
 # ---------------------------------------------------------------------------
 # _extract_imports
 # ---------------------------------------------------------------------------
+
 
 class TestExtractImports:
     def test_single_import(self):
@@ -162,16 +165,17 @@ class TestExtractImports:
 # build_solution_file
 # ---------------------------------------------------------------------------
 
+
 class TestBuildSolutionFile:
     def test_wraps_with_package_and_imports(self):
         generated = (
-            'package main\n'
-            '\n'
+            "package main\n"
+            "\n"
             'import "math"\n'
-            '\n'
-            'func Solve(x float64) float64 {\n'
-            '    return math.Sqrt(x)\n'
-            '}'
+            "\n"
+            "func Solve(x float64) float64 {\n"
+            "    return math.Sqrt(x)\n"
+            "}"
         )
         result = build_solution_file(generated)
         assert result.startswith("package main\n")
@@ -183,13 +187,13 @@ class TestBuildSolutionFile:
     def test_handles_bare_function(self):
         """HumanEval-X format: no package, just imports + function."""
         generated = (
-            'import (\n'
+            "import (\n"
             '    "math"\n'
-            ')\n'
-            '\n'
-            'func HasCloseElements(numbers []float64, threshold float64) bool {\n'
-            '    return true\n'
-            '}'
+            ")\n"
+            "\n"
+            "func HasCloseElements(numbers []float64, threshold float64) bool {\n"
+            "    return true\n"
+            "}"
         )
         result = build_solution_file(generated)
         assert result.startswith("package main\n")
@@ -198,11 +202,7 @@ class TestBuildSolutionFile:
 
     def test_strips_markdown_fences(self):
         generated = (
-            '```go\n'
-            'package main\n'
-            '\n'
-            'func Add(a, b int) int { return a + b }\n'
-            '```'
+            "```go\npackage main\n\nfunc Add(a, b int) int { return a + b }\n```"
         )
         result = build_solution_file(generated)
         assert "```" not in result
@@ -213,13 +213,14 @@ class TestBuildSolutionFile:
 # build_test_file
 # ---------------------------------------------------------------------------
 
+
 class TestBuildTestFile:
     def test_wraps_test_with_imports(self):
         test_code = (
-            'func TestAdd(t *testing.T) {\n'
-            '    assert := assert.New(t)\n'
-            '    assert.Equal(3, Add(1, 2))\n'
-            '}'
+            "func TestAdd(t *testing.T) {\n"
+            "    assert := assert.New(t)\n"
+            "    assert.Equal(3, Add(1, 2))\n"
+            "}"
         )
         result = build_test_file(test_code)
         assert result.startswith("package main\n")
@@ -228,13 +229,15 @@ class TestBuildTestFile:
         assert "func TestAdd" in result
 
     def test_detects_rand_import(self):
-        test_code = 'func TestFoo(t *testing.T) {\n    rng := rand.New(rand.NewSource(42))\n}'
+        test_code = (
+            "func TestFoo(t *testing.T) {\n    rng := rand.New(rand.NewSource(42))\n}"
+        )
         result = build_test_file(test_code)
         assert '"math/rand"' in result
         assert '"time"' not in result
 
     def test_detects_time_import(self):
-        test_code = 'func TestFoo(t *testing.T) {\n    _ = time.Now()\n}'
+        test_code = "func TestFoo(t *testing.T) {\n    _ = time.Now()\n}"
         result = build_test_file(test_code)
         assert '"time"' in result
 
@@ -243,27 +246,28 @@ class TestBuildTestFile:
 # build_combined_source (legacy API)
 # ---------------------------------------------------------------------------
 
+
 class TestBuildCombinedSource:
     def test_inserts_before_main_in_test(self):
         generated = (
-            'package main\n'
-            '\n'
+            "package main\n"
+            "\n"
             'import "fmt"\n'
-            '\n'
-            'func Add(a, b int) int {\n'
-            '    return a + b\n'
-            '}'
+            "\n"
+            "func Add(a, b int) int {\n"
+            "    return a + b\n"
+            "}"
         )
         test_code = (
-            'package main\n'
-            '\n'
+            "package main\n"
+            "\n"
             'import "fmt"\n'
-            '\n'
-            'func main() {\n'
-            '    if Add(1, 2) != 3 {\n'
+            "\n"
+            "func main() {\n"
+            "    if Add(1, 2) != 3 {\n"
             '        panic("fail")\n'
-            '    }\n'
-            '}'
+            "    }\n"
+            "}"
         )
         combined = build_combined_source(generated, test_code)
         add_pos = combined.find("func Add")
@@ -277,6 +281,7 @@ class TestBuildCombinedSource:
 # Integration tests (require Docker)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.integration
 class TestDockerIntegration:
     @pytest.fixture(autouse=True, scope="class")
@@ -286,27 +291,24 @@ class TestDockerIntegration:
 
     def test_check_docker_available(self):
         from rich.console import Console
+
         console = Console()
         assert check_docker_available(console) is True
 
     def test_passing_test(self):
-        solution = (
-            'package main\n'
-            '\n'
-            'func Add(a, b int) int { return a + b }\n'
-        )
+        solution = "package main\n\nfunc Add(a, b int) int { return a + b }\n"
         test = (
-            'package main\n'
-            '\n'
-            'import (\n'
+            "package main\n"
+            "\n"
+            "import (\n"
             '\t"testing"\n'
             '\t"github.com/stretchr/testify/assert"\n'
-            ')\n'
-            '\n'
-            'func TestAdd(t *testing.T) {\n'
-            '\tassert := assert.New(t)\n'
-            '\tassert.Equal(3, Add(1, 2))\n'
-            '}\n'
+            ")\n"
+            "\n"
+            "func TestAdd(t *testing.T) {\n"
+            "\tassert := assert.New(t)\n"
+            "\tassert.Equal(3, Add(1, 2))\n"
+            "}\n"
         )
         result = run_in_docker(solution, test, "test_pass")
         assert result.compiles is True
@@ -314,52 +316,40 @@ class TestDockerIntegration:
         assert result.timed_out is False
 
     def test_failing_test(self):
-        solution = (
-            'package main\n'
-            '\n'
-            'func Add(a, b int) int { return a + b }\n'
-        )
+        solution = "package main\n\nfunc Add(a, b int) int { return a + b }\n"
         test = (
-            'package main\n'
-            '\n'
-            'import (\n'
+            "package main\n"
+            "\n"
+            "import (\n"
             '\t"testing"\n'
             '\t"github.com/stretchr/testify/assert"\n'
-            ')\n'
-            '\n'
-            'func TestAdd(t *testing.T) {\n'
-            '\tassert := assert.New(t)\n'
-            '\tassert.Equal(999, Add(1, 2))\n'
-            '}\n'
+            ")\n"
+            "\n"
+            "func TestAdd(t *testing.T) {\n"
+            "\tassert := assert.New(t)\n"
+            "\tassert.Equal(999, Add(1, 2))\n"
+            "}\n"
         )
         result = run_in_docker(solution, test, "test_fail")
         assert result.compiles is True
         assert result.passes is False
 
     def test_compile_error(self):
-        solution = 'package main\n\nfunc Bad() { undefined_var }\n'
+        solution = "package main\n\nfunc Bad() { undefined_var }\n"
         test = (
-            'package main\n'
-            '\n'
-            'import "testing"\n'
-            '\n'
-            'func TestBad(t *testing.T) { Bad() }\n'
+            'package main\n\nimport "testing"\n\nfunc TestBad(t *testing.T) { Bad() }\n'
         )
         result = run_in_docker(solution, test, "test_compile_err")
         assert result.compiles is False
         assert result.passes is False
 
     def test_evaluate_single_task_pass(self):
-        generated = (
-            'package main\n'
-            '\n'
-            'func Add(a, b int) int { return a + b }\n'
-        )
+        generated = "package main\n\nfunc Add(a, b int) int { return a + b }\n"
         test_code = (
-            'func TestAdd(t *testing.T) {\n'
-            '\tassert := assert.New(t)\n'
-            '\tassert.Equal(3, Add(1, 2))\n'
-            '}\n'
+            "func TestAdd(t *testing.T) {\n"
+            "\tassert := assert.New(t)\n"
+            "\tassert.Equal(3, Add(1, 2))\n"
+            "}\n"
         )
         record = evaluate_single_task("Go/0", generated, test_code)
         assert record.compiles is True
@@ -367,16 +357,12 @@ class TestDockerIntegration:
         assert record.dataset == "humaneval-x"
 
     def test_evaluate_single_task_fail(self):
-        generated = (
-            'package main\n'
-            '\n'
-            'func Add(a, b int) int { return 0 }\n'
-        )
+        generated = "package main\n\nfunc Add(a, b int) int { return 0 }\n"
         test_code = (
-            'func TestAdd(t *testing.T) {\n'
-            '\tassert := assert.New(t)\n'
-            '\tassert.Equal(3, Add(1, 2))\n'
-            '}\n'
+            "func TestAdd(t *testing.T) {\n"
+            "\tassert := assert.New(t)\n"
+            "\tassert.Equal(3, Add(1, 2))\n"
+            "}\n"
         )
         record = evaluate_single_task("Go/0", generated, test_code)
         assert record.compiles is True

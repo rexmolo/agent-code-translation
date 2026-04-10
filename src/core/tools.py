@@ -4,11 +4,20 @@ These are plain functions used by the evaluation agent via Agno's @tool decorato
 """
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 from agno.tools import tool
+
+
+def _go_env(tmpdir: str) -> dict:
+    """Return a copy of the environment with GOCACHE and GOMODCACHE inside tmpdir."""
+    env = os.environ.copy()
+    env["GOCACHE"] = str(Path(tmpdir) / "gocache")
+    env["GOMODCACHE"] = str(Path(tmpdir) / "gomodcache")
+    return env
 
 
 @tool()
@@ -30,6 +39,7 @@ def compile_go_code(go_code: str) -> str:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=_go_env(tmpdir),
             )
             if result.returncode == 0:
                 return json.dumps({"success": True, "error": ""})
@@ -61,6 +71,7 @@ def run_go_code(go_code: str, stdin_input: str = "") -> str:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=_go_env(tmpdir),
             )
             return json.dumps({
                 "success": result.returncode == 0,
@@ -195,6 +206,7 @@ def run_go_tests(go_source_code: str, go_test_code: str) -> str:
             capture_output=True,
             text=True,
             cwd=tmpdir,
+            env=_go_env(tmpdir),
         )
         source_file = Path(tmpdir) / "main.go"
         source_file.write_text(go_source_code, encoding="utf-8")
@@ -207,6 +219,7 @@ def run_go_tests(go_source_code: str, go_test_code: str) -> str:
                 text=True,
                 timeout=30,
                 cwd=tmpdir,
+                env=_go_env(tmpdir),
             )
             output = result.stdout + result.stderr
             passed = output.count("--- PASS:")

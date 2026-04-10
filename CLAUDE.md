@@ -21,4 +21,4 @@
 - tree-sitter for code parsing
 
 ## rules
-- don't read the files inside .doc folder
+- don't read the files inside .doc folder except memory.

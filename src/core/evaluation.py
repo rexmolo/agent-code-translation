@@ -4,6 +4,7 @@ Handles file discovery, path mirroring, and single-file Go evaluation
 (compilation, execution, test running, output comparison).
 """
 
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -11,6 +12,14 @@ from pathlib import Path
 from rich.console import Console
 
 from src.core.schemas import EvaluationRecord
+
+
+def _go_env(tmpdir: str) -> dict:
+    """Return a copy of the environment with GOCACHE and GOMODCACHE inside tmpdir."""
+    env = os.environ.copy()
+    env["GOCACHE"] = str(Path(tmpdir) / "gocache")
+    env["GOMODCACHE"] = str(Path(tmpdir) / "gomodcache")
+    return env
 
 
 def discover_python_files(root: Path) -> list[Path]:
@@ -80,6 +89,7 @@ def evaluate_file(
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=_go_env(tmpdir),
             )
             record.compiles = comp.returncode == 0
             if not record.compiles:
@@ -106,6 +116,7 @@ def evaluate_file(
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=_go_env(tmpdir),
             )
             record.runs_successfully = go_run.returncode == 0
             go_stdout = go_run.stdout
@@ -130,6 +141,7 @@ def evaluate_file(
                 capture_output=True,
                 text=True,
                 cwd=tmpdir,
+                env=_go_env(tmpdir),
             )
             go_file = Path(tmpdir) / "main.go"
             go_file.write_text(go_code, encoding="utf-8")
@@ -142,6 +154,7 @@ def evaluate_file(
                     text=True,
                     timeout=30,
                     cwd=tmpdir,
+                    env=_go_env(tmpdir),
                 )
                 output = test_run.stdout + test_run.stderr
                 passed = output.count("--- PASS:")

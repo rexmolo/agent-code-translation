@@ -431,8 +431,11 @@ def _translate_humaneval_x(
     for provider_key, variant_key, model in enabled:
         run_segment = f"run-{run_id}" if run_id is not None else None
         if experiment == "baseline":
-            # Baseline is dimension-independent — no run-N subfolder needed
-            model_target_dir = target_dir / provider_key / variant_key / experiment
+            baseline_dir = target_dir / provider_key / variant_key / experiment
+            if run_segment:
+                model_target_dir = baseline_dir / run_segment
+            else:
+                model_target_dir = baseline_dir
         elif embedding_backend == "gemini":
             backend_dir = target_dir / provider_key / variant_key / "vec-gemini"
             if run_segment:

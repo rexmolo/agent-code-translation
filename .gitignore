@@ -53,3 +53,4 @@ src/temp/
 config/providers.yaml
 .doc
 mlruns/
+reports/

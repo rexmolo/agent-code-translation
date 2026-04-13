@@ -4,10 +4,7 @@ An agent-based code translation system that translates Python to Go, built for t
 
 ## Overview
 
-The system translates Python source code into idiomatic Go, then evaluates the results using compilation checks, output comparison, and test execution. It supports two datasets:
-
-- **Local** — custom Python source files in `data/translation/source/`
-- **HumanEval-X** — the multilingual benchmark, evaluated inside Docker containers with `go test` and testify assertions
+The system translates Python source code into idiomatic Go, then evaluates the results using compilation checks, output comparison, and test execution. The active thesis workflow uses **HumanEval-X**, evaluated inside Docker containers with `go test` and testify assertions.
 
 Multiple LLM providers are supported through a registry (Google Gemini, MiniMax, OpenAI), each with several model variants.
 
@@ -15,7 +12,6 @@ Multiple LLM providers are supported through a registry (Google Gemini, MiniMax,
 
 - Python 3.13+
 - [uv](https://docs.astral.sh/uv/) for package management
-- Go compiler (for local evaluation)
 - Docker (for HumanEval-X evaluation)
 - ChromaDB Docker container (for RAG vector store)
 
@@ -79,7 +75,7 @@ Subcommand options for `evaluate`:
 
 | Option | Description |
 |---|---|
-| `-d`, `--dataset` | Dataset: `local` or `humaneval-x` (default: `local`) |
+| `-d`, `--dataset` | Dataset: `humaneval-x` (active workflow; `local` is legacy) |
 | `--source-dir` | Override source directory |
 | `--target-dir` | Path to translated output folder to evaluate |
 | `-b`, `--batch-size` | Number of parallel Docker evaluations (overrides `config/eval_config.yaml`) |
@@ -89,7 +85,7 @@ Subcommand options for `translate`:
 
 | Option | Description |
 |---|---|
-| `-d`, `--dataset` | Dataset: `local` or `humaneval-x` (default: `local`) |
+| `-d`, `--dataset` | Dataset: `humaneval-x` (active workflow; `local` is legacy) |
 | `-p`, `--provider` | Provider key (e.g. `minimax`, `gemini`) |
 | `-v`, `--variant` | Model variant key (e.g. `M2.5`, `2.5_pro`) |
 | `-e`, `--experiment` | Experiment name: `baseline`, `rag-pattern-only`, `rag-pattern-samples`, `rag-pattern-api-docs`, `rag-full` (default: `baseline`) |
@@ -352,7 +348,7 @@ src/
 │   ├── agents.py         # Agno translation agent definition
 │   ├── docker_eval.py    # Docker-based HumanEval-X evaluation
 │   ├── error_db.py       # SQLite persistence for evaluation errors (thread-safe)
-│   ├── evaluation.py     # File discovery, mirroring, local Go evaluation
+│   ├── evaluation.py     # File discovery and HumanEval-X evaluation helpers
 │   ├── logger.py         # Verbose pipeline logger with Rich (thread-safe)
 │   ├── pipeline.py       # High-level orchestration (translate / evaluate, parallel)
 │   ├── reporting.py      # Rich summary tables and metric computation
@@ -387,10 +383,9 @@ data/
 │   │   ├── go_docs.jsonl          # Go docs + patterns (~165 entries)
 │   │   └── grammar_mappings.jsonl # Python-Go structural patterns (~45 entries)
 └── translation/
-    ├── source/           # Python source files (local dataset)
     └── target/           # Translated Go output (gitignored)
-        ├── <dataset>/<provider>/<variant>/baseline/                          # Baseline (flat)
-        └── <dataset>/<provider>/<variant>/<backend>/run-<N>/<experiment>/    # RAG with multi-run
+        ├── humaneval-x/<provider>/<variant>/baseline/                       # Baseline (flat)
+        └── humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/ # RAG with multi-run
 ```
 
 ## Design
@@ -434,7 +429,7 @@ We use the Agno agent framework to solve this: the translation agent enforces a 
 
 1. **Preflight checks** — verify API keys, Go compiler, and LLM connectivity before starting
 2. **KB configuration** — apply knowledge base toggles based on experiment name and display active status
-3. **File discovery** — find Python source files (local) or load HumanEval-X problems from HuggingFace
+3. **File discovery** — load HumanEval-X problems from HuggingFace
 4. **Parallel translation** — files are translated concurrently using a thread pool (batch size from `config/eval_config.yaml`). Each thread:
    - Retrieves RAG context (API mappings, documentation, code snippets) based on active KB toggles
    - Creates its own Agno agent instance and sends the prompt to the LLM
@@ -445,14 +440,8 @@ We use the Agno agent framework to solve this: the translation agent enforces a 
 
 Evaluation differs by dataset because the correctness signals differ:
 
-**Local dataset** (direct Go toolchain):
-1. `go build` — does it compile?
-2. `go run` — does it execute without runtime errors?
-3. **Output comparison** — run both the Python source and Go translation, compare stdout. If a Go test file exists, run `go test` instead
-4. Aggregate results into per-file and summary tables
-
 **HumanEval-X** (Docker-sandboxed, parallel):
-1. Build `solution.go` from LLM output (strip markdown fences, extract declarations, reconstruct package/imports)
+1. Build `solution.go` from the LLM output and the provided Go signature
 2. Build `solution_test.go` from HumanEval-X test harness (add package header, detect needed imports like testify)
 3. Run in parallel batches (configurable via `config/eval_config.yaml` or `-b` flag) inside Docker (`golang:1.26-alpine`) with `--network=none` and `--memory=512m`:
    - `go vet ./...` for compile check
@@ -461,11 +450,9 @@ Evaluation differs by dataset because the correctness signals differ:
 
 Docker isolation is necessary for HumanEval-X because we run untrusted LLM-generated code. A shared Docker volume caches Go modules (testify) so individual test runs don't need network access.
 
-### Why two evaluation paths?
+### Why this evaluation path?
 
-The local dataset uses simple stdout comparison — the Python and Go programs should produce identical output. This works for standalone programs but not for library functions.
-
-HumanEval-X provides proper test suites using `testing` + `testify/assert`, so evaluation uses `go test`. These tests exercise function signatures and edge cases, giving a more rigorous correctness signal. But they require Docker for safe execution and dependency management (testify).
+HumanEval-X provides proper test suites using `testing` + `testify/assert`, so evaluation uses `go test`. These tests exercise function signatures and edge cases, giving a more rigorous correctness signal. They require Docker for safe execution and dependency management (testify).
 
 ### Multi-provider model registry
 
@@ -492,7 +479,6 @@ Adding a new provider requires only registering factory functions — no changes
 
 | Metric | Datasets | Description |
 |---|---|---|
-| Compilation@1 | Local, HumanEval-X | Fraction of translations that compile successfully on first attempt |
-| Runs Successfully | Local only | Fraction that execute without runtime errors (not applicable to HumanEval-X function-only code) |
-| Pass@1 | Local, HumanEval-X | Fraction that produce correct output or pass all tests on first attempt |
-| AST Similarity | Local | Structural similarity between source and target ASTs |
+| Compilation@1 | HumanEval-X | Fraction of translations that compile successfully on first attempt |
+| Runs Successfully | HumanEval-X | Not used in the active HumanEval-X-only workflow |
+| Pass@1 | HumanEval-X | Fraction that pass all tests on first attempt |

@@ -51,6 +51,13 @@ class PromptBuilder:
             parts.append(
                 f"Use this Go function signature:\n```go\n{go_signature}\n```"
             )
+            parts.append(
+                "HumanEval-X instructions:\n"
+                "- Implement the provided Go signature only.\n"
+                "- Return only the Go code needed for the function implementation.\n"
+                "- Do not include `main()` or demo/example I/O.\n"
+                "- Include package and import statements only if they are required by the implementation."
+            )
 
         # --- RAG sections (only if rag_result is provided and has content) ---
         if rag_result is not None:

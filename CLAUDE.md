@@ -1,24 +1,23 @@
 # CLAUDE.md
 
 ## Project Overview
-- This is a thesis experiment project which is about to build a agent code translation system. 
-- It focuses on the code translation Python to Go.
-- All docs in the docs/ folder contain the documentation of the project
-- First, read the MD files whenever you enter a new folder to understand what the folder is about.
+- This is a thesis experiment project building an agent-based Python to Go translation system.
+- The active benchmark workflow is HumanEval-X.
+- Read the relevant Markdown files in each folder before working in that area.
 
 
 ## Project Structure
-- src/scripts/ contains the scripts that are used for data processing, for example, extract data and other trivial things.
-- src/data/RAG/processed/ contains the processed data that will be used for embedding for RAG.
-- src/lab/ contains each experiment. Each experiment has its own folder. It will start with "00_" to "99_" to indicate the order of experiments.
-- src/temp/ contains the temporary files.
-- data/translation/ contains two folders: source and target. The source is the source code, and the target is the translated code from our system.
+- src/scripts/ contains data processing and experiment orchestration scripts.
+- src/data/RAG/processed/ contains the processed data used for RAG embeddings.
+- src/lab/ contains experiments. Each experiment has its own folder and uses a numeric prefix for ordering.
+- src/temp/ contains temporary files.
+- data/translation/ contains translated output artifacts under the HumanEval-X target tree.
 
 ## Tools
 - Agno: the core framework of the system.
-- LLMS: MINIMAX2.5
-- Python package management with UV
-- tree-sitter for code parsing
+- LLMs: MiniMax 2.5 and other configured providers.
+- Python package management with UV.
+- tree-sitter for code parsing.
 
 ## rules
 - don't read the files inside .doc folder except memory.

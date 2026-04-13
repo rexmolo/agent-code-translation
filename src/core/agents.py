@@ -12,10 +12,8 @@ Given Python source code, translate it to idiomatic Go code.
 Rules:
 1. Preserve the exact logic and behavior of the original code.
 2. Follow Go conventions: proper error handling, naming (camelCase), etc.
-3. Include all necessary import statements and package declaration.
-4. The code must be compilable and runnable as a standalone program.
-5. If the Python code reads from stdin and writes to stdout, the Go code must do the same.
-6. Use the standard library where possible.
+3. Follow any task-specific output constraints provided in the prompt.
+4. Use the standard library where possible.
 """
 
 _KB_DESCRIPTIONS = {

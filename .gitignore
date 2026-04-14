@@ -54,3 +54,4 @@ config/providers.yaml
 .doc
 mlruns/
 reports/
+.agents/

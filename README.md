@@ -4,7 +4,9 @@ An agent-based code translation system that translates Python to Go, built for t
 
 ## Overview
 
-The system translates Python source code into idiomatic Go, then evaluates the results using compilation checks, output comparison, and test execution. The active thesis workflow uses **HumanEval-X**, evaluated inside Docker containers with `go test` and testify assertions.
+The system translates Python source code into Go, then evaluates the results with Docker-sandboxed HumanEval-X test suites. The active thesis workflow is **HumanEval-X** only.
+
+Each HumanEval-X run is stored as a structured run bundle under `data/translation/humaneval-x/...`, so prompts, retrieval context, raw/parsed model output, evaluation inputs, and run-level summaries stay separate.
 
 Multiple LLM providers are supported through a registry (Google Gemini, MiniMax, OpenAI), each with several model variants.
 
@@ -59,16 +61,26 @@ Walks through dataset selection, action, sample size, and model choice with arro
 uv run python -m src.cli translate
 
 # Translate HumanEval-X with a specific provider/model and experiment name
-uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag -n 10 --skip-preflight
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-full -n 10 --skip-preflight
 
 # Translate first 10 items only
 uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -n 10
 
-# Evaluate existing translations
-uv run python -m src.cli evaluate -d humaneval-x --target-dir data/translation/target/humaneval-x/gemini/2.5_pro/baseline
+# Smoke translation for one RAG run
+uv run python -m src.cli translate \
+  -d humaneval-x -p minimax -v M2.5 -e rag-full \
+  --embedding-backend chromadb --dimension 768 --run 1 -n 1 --skip-preflight
+
+# Evaluate an existing HumanEval-X run bundle
+uv run python -m src.cli evaluate \
+  -d humaneval-x \
+  --target-dir data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
 
 # Evaluate with custom parallelism (default batch size from config/eval_config.yaml)
-uv run python -m src.cli evaluate -d humaneval-x --target-dir data/translation/target/humaneval-x/minimax/M2.5/baseline -b 20
+uv run python -m src.cli evaluate \
+  -d humaneval-x \
+  --target-dir data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full \
+  -b 20
 ```
 
 Subcommand options for `evaluate`:
@@ -115,11 +127,11 @@ uv run python src/scripts/run_all_batches.py \
 # Ctrl+B, D to detach; tmux attach -t experiments to reconnect
 ```
 
-Each batch cycle: translates 9 experiments (sequential, 3s delay) → evaluates them locally via Docker → sleeps until the rate limit window resets. State is saved to `batch_state.json` so it resumes from where it left off if interrupted.
+Each batch cycle translates a window of experiments, evaluates those run bundles via Docker, then sleeps until the rate limit window resets. State is saved to `batch_state.json` so it resumes from where it left off if interrupted.
 
 ### Statistical Analysis
 
-After multi-run experiments complete, analyze significance across embedding dimensions:
+After multi-run experiments complete, analyze significance across embedding dimensions. The script discovers run-level `evaluation/results/summary.json` files under `data/translation/humaneval-x/`.
 
 ```bash
 # ANOVA + pairwise t-tests on Pass@1
@@ -128,6 +140,24 @@ uv run python src/scripts/analyze_statistics.py
 # Analyze Compilation@1 instead
 uv run python src/scripts/analyze_statistics.py --metric compilation_at_1
 ```
+
+### Regression Diagnostics
+
+For baseline-pass / RAG-fail comparisons, use the diagnostics script on completed run bundles:
+
+```bash
+uv run python src/scripts/diagnose_rag_regressions.py \
+  --baseline-run data/translation/humaneval-x/minimax/M2.5/baseline/run-1 \
+  --rag-run data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
+```
+
+The script writes:
+
+- `summary.json`
+- `summary.md`
+- per-task snapshots containing `prompt.json`, `retrieval.json`, `llm_raw.json`, `translation.go`, `solution.go`, `test.go`, and `result.json`
+
+HumanEval-X evaluation also triggers this automatically for RAG runs when a matching baseline run summary already exists.
 
 ### Batch Evaluation
 
@@ -160,6 +190,7 @@ The system uses RAG to provide the LLM with relevant context before translation:
 | Collection | Entries | Description |
 |---|---|---|
 | `grammar_mappings` | ~45 | Python-Go structural syntax patterns & paradigms |
+| `parallel_corpus` | large curated subset | Optional Python-Go reference examples from a parallel corpus |
 | `api_mappings` | ~190 | Python → Go API equivalences (e.g., `json.loads()` → `json.Unmarshal()`) |
 | `go_docs` | ~165 | Go standard library docs + error handling & API sequence patterns |
 
@@ -168,13 +199,14 @@ The system uses RAG to provide the LLM with relevant context before translation:
 ```
 Python code
   → tree-sitter extracts API calls + detects try/except
+  → query parallel_corpus (Dense) for optional reference examples
   → query api_mappings (Hybrid) with extracted API names
   → query go_docs (Hybrid) with matched Go APIs + error patterns
   → query grammar_mappings (Dense) using raw Python code to find structural idiom mappings
   → formatted context → LLM prompt
 ```
 
-Retrieval uses **True Hybrid Search** (BM25 exact keyword matching + Dense embeddings for semantic similarity, merged via Reciprocal Rank Fusion) for API mappings and Go docs. The `grammar_mappings` operate via pure **Dense Search** to structurally match Python patterns based on context.
+Retrieval uses **True Hybrid Search** (BM25 exact keyword matching + Dense embeddings for semantic similarity, merged via Reciprocal Rank Fusion) for API mappings and Go docs. The `grammar_mappings` and `parallel_corpus` collections use dense retrieval to surface structurally similar references.
 
 ### Embedding Backends
 
@@ -182,7 +214,7 @@ The system supports two embedding backends for comparing embedding model perform
 
 | Backend | Embedding Model | Vector Store | Dimensions |
 |---|---|---|---|
-| `chromadb` (default) | all-MiniLM-L6-v2 (local) or OpenAI | ChromaDB (local Docker) | 384 / 3072 |
+| `chromadb` (default) | local, OpenAI, or Gemini embeddings | ChromaDB (local Docker) | commonly `768`, `1536`, `3072` in experiments |
 | `gemini` | Gemini Embedding 001 | Vertex AI Vector Search (Google Cloud) | 3072 |
 
 Both backends use the same hybrid retrieval strategy (BM25 + dense + RRF). Select the backend via the interactive CLI or the `--embedding-backend` flag:
@@ -223,7 +255,7 @@ Before translation or evaluation, the active KB configuration is displayed:
    Run: 1
    RAG: Grammar Patterns: ON | Parallel Corpus: ON | API Mappings: ON | Go Docs: ON
    Embedding: ChromaDB
-   Output: data/translation/target/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
+   Output: data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
    Parallel batch size: 5
 ```
 
@@ -263,10 +295,15 @@ chromadb:
   port: 8000
 
 embedding:
-  provider: "default"   # "default" (free, local), "openai", or "gemini"
+  provider: "gemini"   # "default" (free, local), "openai", or "gemini"
+
+retrieval:
+  parallel_corpus_k: 1
+  api_mappings_k: 2
+  go_docs_k: 1
 
 knowledge_bases:
-  code_snippets: true    # Grammar mappings (Python-Go structural syntax patterns)
+  code_snippets: false   # Parallel corpus examples
   api_mappings: true     # Python -> Go API equivalences
   documentation: true    # Go standard library docs & patterns
 ```
@@ -347,6 +384,7 @@ src/
 ├── core/                 # Core logic
 │   ├── agents.py         # Agno translation agent definition
 │   ├── docker_eval.py    # Docker-based HumanEval-X evaluation
+│   ├── humaneval_artifacts.py  # Run-bundle paths and filesystem helpers
 │   ├── error_db.py       # SQLite persistence for evaluation errors (thread-safe)
 │   ├── evaluation.py     # File discovery and HumanEval-X evaluation helpers
 │   ├── logger.py         # Verbose pipeline logger with Rich (thread-safe)
@@ -368,6 +406,7 @@ src/
 │   └── vertex_store.py   # Vertex AI Vector Search resource management
 ├── scripts/              # One-off data processing scripts
 │   ├── analyze_statistics.py      # ANOVA/t-test analysis of multi-run results
+│   ├── diagnose_rag_regressions.py # Baseline-pass / RAG-fail artifact diffing
 │   ├── extract_codenet_data.py    # Extract CodeNet parallel corpus
 │   ├── generate_api_mappings.py   # Generate Python→Go API mappings
 │   ├── generate_go_docs.py        # Generate Go std library docs
@@ -383,9 +422,32 @@ data/
 │   │   ├── go_docs.jsonl          # Go docs + patterns (~165 entries)
 │   │   └── grammar_mappings.jsonl # Python-Go structural patterns (~45 entries)
 └── translation/
-    └── target/           # Translated Go output (gitignored)
-        ├── humaneval-x/<provider>/<variant>/baseline/                       # Baseline (flat)
-        └── humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/ # RAG with multi-run
+    ├── humaneval-x/      # HumanEval-X run bundles (gitignored)
+    │   └── <provider>/<variant>/
+    │       ├── baseline/run-<N>/
+    │       └── <backend>/run-<N>/<experiment>/
+    └── target/           # Legacy local-dataset output
+```
+
+### HumanEval-X Run Bundle Layout
+
+```text
+data/translation/humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/
+├── manifest.json
+├── tasks/
+│   └── Go_<id>/
+│       ├── prompt.json
+│       ├── retrieval.json
+│       ├── llm_raw.json
+│       ├── translation.go
+│       └── evaluation/
+│           ├── solution.go
+│           ├── test.go
+│           └── result.json
+└── evaluation/
+    └── results/
+        ├── per_task.jsonl
+        └── summary.json
 ```
 
 ## Design
@@ -431,22 +493,31 @@ We use the Agno agent framework to solve this: the translation agent enforces a 
 2. **KB configuration** — apply knowledge base toggles based on experiment name and display active status
 3. **File discovery** — load HumanEval-X problems from HuggingFace
 4. **Parallel translation** — files are translated concurrently using a thread pool (batch size from `config/eval_config.yaml`). Each thread:
-   - Retrieves RAG context (API mappings, documentation, code snippets) based on active KB toggles
+   - Retrieves RAG context (grammar mappings, parallel corpus examples, API mappings, documentation) based on active KB toggles
    - Creates its own Agno agent instance and sends the prompt to the LLM
    - Receives a `TranslationResult` with structured Go output
-5. **Output storage** — translated Go files are saved to `data/translation/target/<dataset>/<provider>/<variant>/<experiment>/`
+5. **Artifact storage** — each task writes:
+   - `prompt.json`
+   - `retrieval.json`
+   - `llm_raw.json`
+   - `translation.go`
+
+For HumanEval-X, prompts request declaration-oriented Go code for the provided signature only. They do not ask for `main()` or demo I/O.
 
 ### Evaluation pipeline
 
-Evaluation differs by dataset because the correctness signals differ:
-
 **HumanEval-X** (Docker-sandboxed, parallel):
-1. Build `solution.go` from the LLM output and the provided Go signature
-2. Build `solution_test.go` from HumanEval-X test harness (add package header, detect needed imports like testify)
+1. Read each task bundle from `tasks/Go_<id>/translation.go`
+2. Build the exact evaluation inputs:
+   - `solution.go` from the saved translation with minimal normalization
+   - `test.go` from the HumanEval-X test harness
 3. Run in parallel batches (configurable via `config/eval_config.yaml` or `-b` flag) inside Docker (`golang:1.26-alpine`) with `--network=none` and `--memory=512m`:
    - `go vet ./...` for compile check
    - `go test -v -count=1 ./...` for test execution
-4. Aggregate results
+4. Persist:
+   - per-task `evaluation/result.json`
+   - run-level `evaluation/results/per_task.jsonl`
+   - run-level `evaluation/results/summary.json`
 
 Docker isolation is necessary for HumanEval-X because we run untrusted LLM-generated code. A shared Docker volume caches Go modules (testify) so individual test runs don't need network access.
 
@@ -479,6 +550,5 @@ Adding a new provider requires only registering factory functions — no changes
 
 | Metric | Datasets | Description |
 |---|---|---|
-| Compilation@1 | HumanEval-X | Fraction of translations that compile successfully on first attempt |
-| Runs Successfully | HumanEval-X | Not used in the active HumanEval-X-only workflow |
-| Pass@1 | HumanEval-X | Fraction that pass all tests on first attempt |
+| Compilation@1 | HumanEval-X | Fraction of task translations whose Docker evaluation compiles successfully |
+| Pass@1 | HumanEval-X | Fraction of task translations that pass the full HumanEval-X test suite |

@@ -20,7 +20,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-BASE = Path("data/translation/target/humaneval-x")
+from src.core.humaneval_artifacts import is_humaneval_run_root
+
+BASE = Path("data/translation/humaneval-x")
 RESULTS_DIR = Path(".doc/memory")
 
 # Track active child so we can clean up on SIGTERM/SIGINT
@@ -39,11 +41,8 @@ signal.signal(signal.SIGINT, _cleanup_handler)
 
 
 def discover_targets() -> list[Path]:
-    """Find all leaf experiment directories that contain Go_*.go files."""
-    targets = []
-    for go_file in BASE.rglob("Go_0.go"):
-        targets.append(go_file.parent)
-    return sorted(targets)
+    """Find all HumanEval-X run roots."""
+    return sorted(path for path in BASE.rglob("*") if is_humaneval_run_root(path))
 
 
 def run_eval(target: Path, idx: int, total: int, timeout: int = 600) -> tuple[Path, bool, str]:

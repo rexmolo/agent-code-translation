@@ -6,7 +6,10 @@ from pydantic import BaseModel, Field
 class TranslationResult(BaseModel):
     """Structured output from the translation agent."""
 
-    go_code: str = Field(..., description="The translated Go source code, complete and compilable")
+    go_code: str = Field(
+        ...,
+        description="The translated Go source code that satisfies the task-specific output contract",
+    )
     explanation: str = Field(
         default="", description="Brief notes on key translation decisions"
     )

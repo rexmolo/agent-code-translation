@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import click
+from src.core.humaneval_artifacts import HumanEvalRunPaths
 
 STATE_FILE_DEFAULT = Path(__file__).resolve().parent.parent.parent / "batch_state.json"
 LOG_DIR = Path(__file__).resolve().parent.parent.parent / ".doc" / "Log"
@@ -193,7 +194,12 @@ def verify_and_retry(
     """
     for attempt in range(1, max_retries + 1):
         expected_nums = set(range(0, expected))
-        existing = {int(f.stem.split("_")[1]) for f in target_dir.glob("Go_*.go")}
+        run_paths = HumanEvalRunPaths(target_dir)
+        existing = {
+            int(task_paths.task_name.split("_")[1])
+            for task_paths in run_paths.iter_task_dirs()
+            if task_paths.translation_go.exists()
+        }
         missing = sorted(expected_nums - existing)
         if not missing:
             return True
@@ -227,7 +233,12 @@ def verify_and_retry(
             log(f"    Retry failed: {e}")
 
     # Final check
-    existing = {int(f.stem.split("_")[1]) for f in target_dir.glob("Go_*.go")}
+    run_paths = HumanEvalRunPaths(target_dir)
+    existing = {
+        int(task_paths.task_name.split("_")[1])
+        for task_paths in run_paths.iter_task_dirs()
+        if task_paths.translation_go.exists()
+    }
     still_missing = sorted(set(range(0, expected)) - existing)
     if still_missing:
         log(f"  ✗ Still missing {len(still_missing)} file(s) after {max_retries} retries: {still_missing}")
@@ -244,19 +255,14 @@ def get_target_dir(
     dimension: int | None,
 ) -> Path:
     """Compute the target directory for an experiment (for evaluation)."""
-    from src.config import HUMANEVAL_X_TARGET_DIR
+    from src.config import HUMANEVAL_X_DIR
+    from src.core.humaneval_artifacts import humaneval_run_root
 
-    base = HUMANEVAL_X_TARGET_DIR / provider / variant
+    backend_label = None
+    if experiment != "baseline":
+        backend_label = "vec-gemini" if embedding_backend == "gemini" else f"vec-chroma-{dimension}"
 
-    if experiment == "baseline":
-        return base / "baseline" / f"run-{run_id}"
-
-    if embedding_backend == "gemini":
-        backend_label = "vec-gemini"
-    else:
-        backend_label = f"vec-chroma-{dimension}"
-
-    return base / backend_label / f"run-{run_id}" / experiment
+    return humaneval_run_root(HUMANEVAL_X_DIR, provider, variant, experiment, backend_label, run_id)
 
 
 def run_evaluate(target_dir: Path) -> bool:
@@ -268,8 +274,8 @@ def run_evaluate(target_dir: Path) -> bool:
         log(f"  ⚠ Target dir not found: {target_dir}")
         return False
 
-    go_files = list(target_dir.glob("Go_*.go"))
-    if not go_files:
+    task_count = sum(1 for task in HumanEvalRunPaths(target_dir).iter_task_dirs() if task.translation_go.exists())
+    if task_count == 0:
         log(f"  ⚠ No Go files in {target_dir}")
         return False
 

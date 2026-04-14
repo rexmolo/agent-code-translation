@@ -15,7 +15,8 @@ from questionary import Choice, Style
 from rich.console import Console
 from rich.panel import Panel
 
-from src.config import TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
+from src.config import HUMANEVAL_X_DIR, TRANSLATION_SOURCE_DIR, TRANSLATION_TARGET_DIR
+from src.core.humaneval_artifacts import is_humaneval_run_root
 from src.core import pipeline as _pipeline
 from src.core.logger import set_verbose
 from src.providers.registry import enable_model, list_providers, list_variants
@@ -101,21 +102,27 @@ def _ask_or_abort(result):
 
 def _pick_eval_target(dataset: str) -> Path:
     """Discover target folders (provider/variant/experiment) and let user pick one."""
-    target_root = TRANSLATION_TARGET_DIR / dataset
+    target_root = HUMANEVAL_X_DIR if dataset == "humaneval-x" else TRANSLATION_TARGET_DIR / dataset
     folders: list[tuple[str, Path]] = []
 
     if target_root.is_dir():
-        for provider_dir in sorted(target_root.iterdir()):
-            if not provider_dir.is_dir() or provider_dir.name.startswith("."):
-                continue
-            for variant_dir in sorted(provider_dir.iterdir()):
-                if not variant_dir.is_dir() or variant_dir.name.startswith("."):
+        if dataset == "humaneval-x":
+            for path in sorted(target_root.rglob("*")):
+                if is_humaneval_run_root(path):
+                    label = str(path.relative_to(target_root))
+                    folders.append((label, path))
+        else:
+            for provider_dir in sorted(target_root.iterdir()):
+                if not provider_dir.is_dir() or provider_dir.name.startswith("."):
                     continue
-                for experiment_dir in sorted(variant_dir.iterdir()):
-                    if not experiment_dir.is_dir() or experiment_dir.name.startswith("."):
+                for variant_dir in sorted(provider_dir.iterdir()):
+                    if not variant_dir.is_dir() or variant_dir.name.startswith("."):
                         continue
-                    label = f"{provider_dir.name}/{variant_dir.name}/{experiment_dir.name}"
-                    folders.append((label, experiment_dir))
+                    for experiment_dir in sorted(variant_dir.iterdir()):
+                        if not experiment_dir.is_dir() or experiment_dir.name.startswith("."):
+                            continue
+                        label = f"{provider_dir.name}/{variant_dir.name}/{experiment_dir.name}"
+                        folders.append((label, experiment_dir))
 
     if not folders:
         console.print(f"[red]No translated output found under target/{dataset}/[/red]")

@@ -1,14 +1,15 @@
 """Save and compare LLM prompts for each RAG variant across embedding backends.
 
 Generates prompts for Gemini (Vertex AI) and ChromaDB backends using
-HumanEval-X problem 0, saves them to .doc/Notes/, then prints a diff
-showing what changed between backends per variant.
+HumanEval-X problem 0, saves prompt and retrieval snapshots to .doc/Notes/,
+then prints a diff showing what changed between backends per variant.
 
 Usage:
     uv run python src/scripts/save_prompts.py
 """
 
 import difflib
+import json
 from pathlib import Path
 
 from src.data.humaneval_x import load_humaneval_x
@@ -16,6 +17,7 @@ from src.core.agents import _BASE_INSTRUCTIONS, _build_rag_section
 from src.core.prompt_builder import PromptBuilder
 from src.rag.retriever import (
     build_translation_context,
+    build_retrieval_artifact,
     configure_kb_for_experiment,
     get_active_kb_toggles,
 )
@@ -35,8 +37,8 @@ BACKENDS = [
 ]
 
 
-def _build_full_prompt(python_code: str, go_signature: str, variant: str, backend: str) -> tuple[str, str]:
-    """Return (system_prompt, user_prompt) for a given variant + backend."""
+def _build_full_prompt(python_code: str, go_signature: str, variant: str, backend: str) -> dict:
+    """Return prompt and retrieval artifacts for a given variant + backend."""
     # Reset retriever cache between backends
     from src.rag import retriever as _ret
     _ret._retrievers.clear()
@@ -50,7 +52,15 @@ def _build_full_prompt(python_code: str, go_signature: str, variant: str, backen
     user_prompt = PromptBuilder().build_humaneval_x(
         python_code, go_signature=go_signature, rag_result=rag_result
     )
-    return system_prompt, user_prompt
+    return {
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "retrieval": build_retrieval_artifact(
+            rag_result,
+            embedding_backend=backend,
+            kb_toggles=kb_toggles,
+        ),
+    }
 
 
 def main() -> None:
@@ -65,16 +75,19 @@ def main() -> None:
     print(f"Problem: {task_id}\n")
 
     # Store prompts for comparison
-    prompts: dict[tuple[str, str], tuple[str, str]] = {}
+    prompts: dict[tuple[str, str], dict] = {}
 
     for backend, label in BACKENDS:
         print(f"\n=== Backend: {label} ===")
         for variant in VARIANTS:
             print(f"  Building prompt for: {variant} ...")
-            system_prompt, user_prompt = _build_full_prompt(
+            prompt_snapshot = _build_full_prompt(
                 python_code, go_signature, variant, backend
             )
-            prompts[(variant, backend)] = (system_prompt, user_prompt)
+            prompts[(variant, backend)] = prompt_snapshot
+
+            system_prompt = prompt_snapshot["system_prompt"]
+            user_prompt = prompt_snapshot["user_prompt"]
 
             out_path = OUTPUT_DIR / f"prompt_{variant}_{label}.md"
             out_path.write_text(
@@ -89,6 +102,27 @@ def main() -> None:
                 encoding="utf-8",
             )
             print(f"  Saved → {out_path.name}")
+
+            payload_path = OUTPUT_DIR / f"prompt_{variant}_{label}.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "task_id": task_id,
+                        "variant": variant,
+                        "embedding_backend": backend,
+                        "system_prompt": system_prompt,
+                        "user_prompt": user_prompt,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+            retrieval_path = OUTPUT_DIR / f"retrieval_{variant}_{label}.json"
+            retrieval_path.write_text(
+                json.dumps(prompt_snapshot["retrieval"], indent=2),
+                encoding="utf-8",
+            )
 
     # Compare vec-gemini vs vec-chroma for each variant
     print("\n\n" + "=" * 60)
@@ -106,8 +140,8 @@ def main() -> None:
     ]
 
     for variant in VARIANTS:
-        _, gemini_user = prompts[(variant, "gemini")]
-        _, chroma_user = prompts[(variant, "chromadb")]
+        gemini_user = prompts[(variant, "gemini")]["user_prompt"]
+        chroma_user = prompts[(variant, "chromadb")]["user_prompt"]
 
         gemini_lines = gemini_user.splitlines(keepends=True)
         chroma_lines = chroma_user.splitlines(keepends=True)

@@ -37,9 +37,9 @@ vertex_ai:
 
 retrieval:
   # Number of results to return per collection
-  parallel_corpus_k: 3
-  api_mappings_k: 5
-  go_docs_k: 3
+  parallel_corpus_k: 1
+  api_mappings_k: 2
+  go_docs_k: 1
 
   # Reciprocal Rank Fusion constant (higher = more uniform weighting)
   rrf_k: 60

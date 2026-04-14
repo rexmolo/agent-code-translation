@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 
 from rank_bm25 import BM25Okapi
 
@@ -422,6 +423,67 @@ class RAGResult:
         self.grammar_mappings: list[dict] = []
         self.parallel_corpus: list[dict] = []
         self.context: str = ""
+
+    def to_artifact(
+        self,
+        *,
+        embedding_backend: str,
+        kb_toggles: dict[str, bool] | None = None,
+        retrieval_config: dict | None = None,
+    ) -> dict:
+        """Return a JSON-serializable retrieval artifact for persistence."""
+        return build_retrieval_artifact(
+            self,
+            embedding_backend=embedding_backend,
+            kb_toggles=kb_toggles,
+            retrieval_config=retrieval_config,
+        )
+
+
+def _normalize_kb_toggles(kb_toggles: dict[str, bool] | None) -> dict[str, bool]:
+    normalized = dict(kb_toggles or {})
+    if "code_snippets" in normalized and "parallel_corpus" not in normalized:
+        normalized["parallel_corpus"] = normalized.pop("code_snippets")
+    return normalized
+
+
+def build_retrieval_artifact(
+    rag_result: RAGResult,
+    *,
+    embedding_backend: str,
+    kb_toggles: dict[str, bool] | None = None,
+    retrieval_config: dict | None = None,
+) -> dict:
+    """Serialize a RAGResult into a stable artifact payload.
+
+    This is intentionally independent from pipeline path handling so callers can
+    persist the returned dict wherever they want.
+    """
+    config = dict(retrieval_config or _cfg()["retrieval"])
+    items = {
+        "grammar_mappings": deepcopy(rag_result.grammar_mappings),
+        "parallel_corpus": deepcopy(rag_result.parallel_corpus),
+        "api_mappings": deepcopy(rag_result.api_mappings),
+        "documentation": deepcopy(rag_result.documentation),
+    }
+    return {
+        "embedding_backend": embedding_backend,
+        "kb_toggles": _normalize_kb_toggles(
+            kb_toggles if kb_toggles is not None else _get_kb_toggles()
+        ),
+        "retrieval_config": {
+            "parallel_corpus_k": config.get("parallel_corpus_k"),
+            "api_mappings_k": config.get("api_mappings_k"),
+            "go_docs_k": config.get("go_docs_k"),
+            "rrf_k": config.get("rrf_k"),
+        },
+        "retrieval_counts": {
+            key: len(value)
+            for key, value in items.items()
+        },
+        "items": items,
+        "rendered_context": rag_result.context,
+    }
 
 
 def build_translation_context(

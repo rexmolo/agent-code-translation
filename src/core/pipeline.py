@@ -5,6 +5,7 @@ evaluation workflows across datasets (local, HumanEval-X) and models.
 """
 
 import multiprocessing
+import json
 import os
 import threading
 import time
@@ -20,11 +21,19 @@ from src.config import (
     TRANSLATION_SOURCE_DIR,
     TRANSLATION_TARGET_DIR,
     LOCAL_TARGET_DIR,
-    HUMANEVAL_X_TARGET_DIR,
+    HUMANEVAL_X_DIR,
     load_eval_config,
 )
 from src.core import agents as _agents
 from src.core import reporting as _reporting
+from src.core.humaneval_artifacts import (
+    HumanEvalRunPaths,
+    append_jsonl,
+    humaneval_run_root,
+    parse_humaneval_run_root,
+    write_json,
+    write_text,
+)
 from src.core.prompt_builder import PromptBuilder
 from src.core.evaluation import discover_python_files, mirror_path, evaluate_file
 from src.core.error_db import save_error
@@ -37,6 +46,8 @@ from src.core.logger import (
 from src.core.schemas import TranslationResult, EvaluationRecord
 from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars, resolve_provider_api_key
 from src.rag.embeddings import load_rag_config
+from src.rag.retriever import build_retrieval_artifact
+from src.scripts.diagnose_rag_regressions import analyze_regressions, write_reports
 
 
 def _chroma_backend_label() -> str:
@@ -44,6 +55,146 @@ def _chroma_backend_label() -> str:
     from src.rag.embeddings import get_active_dimensions
     return f"vec-chroma-{get_active_dimensions()}"
 
+
+def _humaneval_backend_label(experiment: str, embedding_backend: str) -> str | None:
+    if experiment == "baseline":
+        return None
+    if embedding_backend == "gemini":
+        return "vec-gemini"
+    return _chroma_backend_label()
+
+
+def _serialize_raw_response(response: object) -> dict:
+    """Best-effort serialization for raw provider output."""
+    for method_name in ("model_dump", "dict", "to_dict"):
+        method = getattr(response, method_name, None)
+        if callable(method):
+            try:
+                payload = method()
+            except Exception:
+                continue
+            return {
+                "available": True,
+                "format": "json",
+                "payload": payload,
+                "note": f"Serialized via response.{method_name}()",
+            }
+
+    for attr_name in ("raw", "raw_response", "response"):
+        payload = getattr(response, attr_name, None)
+        if payload is None:
+            continue
+        if isinstance(payload, (str, bytes)):
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8", errors="replace")
+            return {
+                "available": True,
+                "format": "text",
+                "payload": payload,
+                "note": f"Captured from response.{attr_name}",
+            }
+        return {
+            "available": True,
+            "format": "json",
+            "payload": json.loads(json.dumps(payload, default=str)),
+            "note": f"Captured from response.{attr_name}",
+        }
+
+    return {
+        "available": False,
+        "format": "unavailable",
+        "payload": None,
+        "note": "Raw provider payload is not exposed by the SDK response object.",
+    }
+
+
+def _prompt_payload(
+    translator: object,
+    user_prompt: str,
+    provider: str,
+    variant: str,
+    task_id: str,
+    experiment: str,
+    embedding_backend: str,
+    kb_toggles: dict | None,
+) -> dict:
+    system_prompt = getattr(translator, "instructions", "")
+    return {
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+        "provider": provider,
+        "variant": variant,
+        "task_id": task_id,
+        "experiment": experiment,
+        "embedding_backend": embedding_backend,
+        "kb_toggles": kb_toggles or {},
+    }
+
+
+def _write_run_manifest(
+    run_paths: HumanEvalRunPaths,
+    *,
+    provider: str,
+    variant: str,
+    experiment: str,
+    embedding_backend: str,
+    backend_label: str | None,
+    run_id: int | None,
+    task_count: int,
+) -> None:
+    write_json(
+        run_paths.manifest_json,
+        {
+            "dataset": "humaneval-x",
+            "provider": provider,
+            "variant": variant,
+            "experiment": experiment,
+            "embedding_backend": embedding_backend,
+            "backend_label": backend_label,
+            "run_id": run_id,
+            "task_count": task_count,
+        },
+    )
+
+
+def _translation_record(task_id: str, task_paths, status: str) -> dict:
+    return {
+        "task_id": task_id,
+        "task_dir": str(task_paths.task_dir),
+        "translation": str(task_paths.translation_go),
+        "status": status,
+    }
+
+
+def _maybe_write_rag_diagnostics(
+    *,
+    provider: str,
+    variant: str,
+    experiment: str,
+    run_id: int | None,
+    run_paths: HumanEvalRunPaths,
+) -> None:
+    """Generate baseline-pass / RAG-fail diagnostics after evaluating a RAG run."""
+    if experiment == "baseline":
+        return
+
+    baseline_run = humaneval_run_root(
+        HUMANEVAL_X_DIR,
+        provider,
+        variant,
+        "baseline",
+        None,
+        run_id,
+    )
+    baseline_summary = HumanEvalRunPaths(baseline_run).summary_json
+    if not baseline_summary.is_file():
+        return
+
+    summary = analyze_regressions(
+        baseline_run=baseline_run,
+        rag_runs=[run_paths.run_root],
+    )
+    write_reports(summary, run_paths.diagnostics_dir)
 
 def _get_rag_result(
     python_code: str,
@@ -94,42 +245,8 @@ def _setup_and_display_kb(
 
 
 def _parse_target_path(target_dir: Path) -> tuple[str, str, str, str | None, int | None]:
-    """Extract provider, variant, experiment, optional backend, and optional run_id from a target directory path.
-
-    Baseline paths:
-        .../humaneval-x/<provider>/<variant>/baseline/run-N
-        .../humaneval-x/<provider>/<variant>/<experiment>              (legacy, no run)
-    RAG paths:
-        .../humaneval-x/<provider>/<variant>/<backend>/run-N/<experiment>
-        .../humaneval-x/<provider>/<variant>/<backend>/<experiment>    (legacy, no run)
-    """
-    parts = target_dir.parts
-    last = parts[-1]
-
-    # New format: baseline/run-N → Go files directly in run-N/
-    if last.startswith("run-"):
-        run_id = int(last.split("-", 1)[1])
-        parent = parts[-2]
-        if parent == "baseline":
-            return parts[-4], parts[-3], "baseline", None, run_id
-        # baseline is the only case where run-N is the leaf
-        # For RAG: backend/run-N/experiment — but leaf is experiment, not run-N
-        # This branch handles evaluation pointed directly at a run-N dir (shouldn't happen for RAG)
-        return parts[-4], parts[-3], "baseline", None, run_id
-
-    # Check for run-N in the path (RAG: backend/run-N/experiment)
-    parent = parts[-2]
-    if parent.startswith("run-"):
-        run_id = int(parent.split("-", 1)[1])
-        backend = parts[-3]
-        if backend.startswith("vec-"):
-            return parts[-5], parts[-4], last, backend, run_id
-        return parts[-4], parts[-3], last, None, run_id
-
-    # Legacy paths (no run-N)
-    if parent.startswith("vec-"):
-        return parts[-4], parts[-3], last, parent, None
-    return parts[-3], parts[-2], last, None, None
+    """Extract provider, variant, experiment, optional backend, and optional run_id."""
+    return parse_humaneval_run_root(target_dir)
 
 
 def _classify_error(record: EvaluationRecord) -> str | None:
@@ -245,7 +362,7 @@ def translate(
     if dataset == "local":
         _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_TARGET_DIR, skip_preflight, sample=sample, problems=problems, experiment=experiment, embedding_backend=embedding_backend, run_id=run_id)
+        _translate_humaneval_x(HUMANEVAL_X_DIR, skip_preflight, sample=sample, problems=problems, experiment=experiment, embedding_backend=embedding_backend, run_id=run_id)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -390,14 +507,7 @@ def _translate_humaneval_x(
     embedding_backend: str = "chromadb",
     run_id: int | None = None,
 ) -> None:
-    """Translate HumanEval-X Python problems to Go.
-
-    Output (with run_id):
-        baseline: target/humaneval-x/<provider>/<variant>/baseline/run-<N>/Go_<N>.go
-        RAG:      target/humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/Go_<N>.go
-    Output (without run_id — legacy):
-        target/humaneval-x/<provider>/<variant>/<experiment>/Go_<N>.go
-    """
+    """Translate HumanEval-X Python problems into per-task run bundles."""
     from src.data.humaneval_x import load_humaneval_x
 
     console = Console()
@@ -429,26 +539,27 @@ def _translate_humaneval_x(
     stagger = translation_cfg.get("thread_stagger_seconds", 1)
 
     for provider_key, variant_key, model in enabled:
-        run_segment = f"run-{run_id}" if run_id is not None else None
-        if experiment == "baseline":
-            baseline_dir = target_dir / provider_key / variant_key / experiment
-            if run_segment:
-                model_target_dir = baseline_dir / run_segment
-            else:
-                model_target_dir = baseline_dir
-        elif embedding_backend == "gemini":
-            backend_dir = target_dir / provider_key / variant_key / "vec-gemini"
-            if run_segment:
-                model_target_dir = backend_dir / run_segment / experiment
-            else:
-                model_target_dir = backend_dir / experiment
-        else:
-            backend_dir = target_dir / provider_key / variant_key / _chroma_backend_label()
-            if run_segment:
-                model_target_dir = backend_dir / run_segment / experiment
-            else:
-                model_target_dir = backend_dir / experiment
-        model_target_dir.mkdir(parents=True, exist_ok=True)
+        backend_label = _humaneval_backend_label(experiment, embedding_backend)
+        model_target_dir = humaneval_run_root(
+            target_dir,
+            provider_key,
+            variant_key,
+            experiment,
+            backend_label,
+            run_id,
+        )
+        run_paths = HumanEvalRunPaths(model_target_dir)
+        run_paths.ensure_translation_dirs()
+        _write_run_manifest(
+            run_paths,
+            provider=provider_key,
+            variant=variant_key,
+            experiment=experiment,
+            embedding_backend=embedding_backend,
+            backend_label=backend_label,
+            run_id=run_id,
+            task_count=len(pairs),
+        )
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
         console.print(f"   Experiment: {experiment}")
@@ -469,7 +580,7 @@ def _translate_humaneval_x(
             time.sleep(stagger_delay)
             translator = _agents.create_translation_agent(model, kb_toggles=_kb_toggles)
             task_num = pair["task_id"].split("/")[1]
-            target_file = model_target_dir / f"Go_{task_num}.go"
+            task_paths = run_paths.task(task_num)
             log_translation_start(pair["task_id"], provider_key, variant_key)
 
             rag_result = _get_rag_result(pair["py_solution"], experiment, embedding_backend)
@@ -478,23 +589,65 @@ def _translate_humaneval_x(
                 go_signature=pair["declaration"],
                 rag_result=rag_result,
             )
+            write_json(
+                task_paths.prompt_json,
+                _prompt_payload(
+                    translator,
+                    prompt,
+                    provider_key,
+                    variant_key,
+                    pair["task_id"],
+                    experiment,
+                    embedding_backend,
+                    _kb_toggles,
+                ),
+            )
+            write_json(
+                task_paths.retrieval_json,
+                (
+                    build_retrieval_artifact(
+                        rag_result,
+                        embedding_backend=embedding_backend,
+                        kb_toggles=_kb_toggles,
+                    )
+                    if rag_result is not None
+                    else {
+                        "embedding_backend": embedding_backend,
+                        "kb_toggles": _kb_toggles or {},
+                        "retrieval_config": {},
+                        "retrieval_counts": {},
+                        "items": {},
+                        "rendered_context": "",
+                    }
+                ),
+            )
             log_prompt(prompt)
 
             try:
                 response = translator.run(prompt, stream=False)
+                write_json(task_paths.llm_raw_json, _serialize_raw_response(response))
                 result = response.content
 
                 if isinstance(result, TranslationResult):
-                    target_file.write_text(result.go_code, encoding="utf-8")
-                    log_response(result, str(target_file))
-                    log_translation_done(pair["task_id"], str(target_file))
-                    return {"source": pair["task_id"], "target": str(target_file), "status": "ok"}
+                    write_text(task_paths.translation_go, result.go_code)
+                    log_response(result, str(task_paths.translation_go))
+                    log_translation_done(pair["task_id"], str(task_paths.translation_go))
+                    return _translation_record(pair["task_id"], task_paths, "ok")
                 else:
                     log_response(result)
-                    return {"source": pair["task_id"], "target": str(target_file), "status": "no structured output"}
+                    return _translation_record(pair["task_id"], task_paths, "no structured output")
             except Exception as e:
+                write_json(
+                    task_paths.llm_raw_json,
+                    {
+                        "available": False,
+                        "format": "error",
+                        "payload": None,
+                        "note": f"Translation request failed before a raw response could be captured: {e}",
+                    },
+                )
                 log_translation_error(pair["task_id"], e)
-                return {"source": pair["task_id"], "target": str(target_file), "status": f"error: {e}"}
+                return _translation_record(pair["task_id"], task_paths, f"error: {e}")
 
         with Progress() as progress:
             task = progress.add_task(f"Translating ({label})...", total=len(pairs))
@@ -517,7 +670,7 @@ def _translate_humaneval_x(
                             )
                             with print_lock:
                                 progress.console.print(
-                                    f"  {status_tag} {pair['task_id']} -> Go_{pair['task_id'].split('/')[1]}.go"
+                                    f"  {status_tag} {pair['task_id']} -> tasks/Go_{pair['task_id'].split('/')[1]}/translation.go"
                                 )
                                 if record["status"] not in ("ok",):
                                     progress.console.print(f"         [dim]{record['status']}[/dim]")
@@ -526,7 +679,7 @@ def _translate_humaneval_x(
                             with print_lock:
                                 progress.console.print(f"  [red]ERROR[/red] {pair['task_id']}: {exc}")
                             records.append({
-                                "source": pair["task_id"], "target": "", "status": f"error: {exc}",
+                                "source": pair["task_id"], "task_dir": "", "translation": "", "status": f"error: {exc}",
                             })
 
                         progress.advance(task)
@@ -597,17 +750,6 @@ def _evaluate_local(
     summary = _reporting.compute_summary(records)
     _reporting.display_summary_table(summary)
 
-    _log_mlflow_run(
-        provider=provider,
-        variant=variant,
-        experiment=experiment,
-        backend=backend,
-        summary=summary,
-        records=records,
-        target_dir=eval_target_dir,
-        run_id=run_id,
-    )
-
 
 def _evaluate_humaneval_x(
     eval_target_dir: Path | None = None,
@@ -626,6 +768,7 @@ def _evaluate_humaneval_x(
         ensure_go_image,
         ensure_go_mod_cache,
         evaluate_single_task,
+        prepare_evaluation_sources,
         DEFAULT_GO_IMAGE,
     )
 
@@ -646,6 +789,8 @@ def _evaluate_humaneval_x(
     timeout = eval_config["docker"]["timeout"]
 
     provider, variant, experiment, backend, run_id = _parse_target_path(eval_target_dir)
+    run_paths = HumanEvalRunPaths(eval_target_dir)
+    run_paths.ensure_evaluation_dirs()
 
     console.print(f"\n[bold blue]── Evaluating (HumanEval-X): {eval_target_dir} ──[/bold blue]")
     console.print(f"   Experiment: {experiment}")
@@ -675,46 +820,49 @@ def _evaluate_humaneval_x(
         task_lookup[task_num] = pair
     console.print(f"Loaded [bold]{len(pairs)}[/bold] HumanEval-X problems.\n")
 
-    # Discover Go_*.go files
-    go_files = sorted(eval_target_dir.glob("Go_*.go"), key=lambda f: int(f.stem.replace("Go_", "")))
-    if not go_files:
-        console.print("[yellow]No Go_*.go files found in target directory.[/yellow]")
+    task_dirs = run_paths.iter_task_dirs()
+    if not task_dirs:
+        console.print("[yellow]No task bundles found in target directory.[/yellow]")
         return
 
-    console.print(f"Found [bold]{len(go_files)}[/bold] translated Go files to evaluate.")
+    console.print(f"Found [bold]{len(task_dirs)}[/bold] translated task bundles to evaluate.")
     console.print(f"[dim]Parallel batch size: {batch_size}[/dim]\n")
 
     # Build work items (skip files with no matching task)
-    work_items: list[tuple[Path, dict]] = []
+    work_items: list[tuple[HumanEvalRunPaths, object]] = []
     skipped = 0
-    for go_file in go_files:
-        task_num = go_file.stem.replace("Go_", "")
+    for task_paths in task_dirs:
+        task_num = task_paths.task_name.replace("Go_", "")
         pair = task_lookup.get(task_num)
         if pair is None:
-            console.print(f"  [yellow]SKIP[/yellow] {go_file.name}: no matching HumanEval-X task")
+            console.print(f"  [yellow]SKIP[/yellow] {task_paths.task_name}: no matching HumanEval-X task")
             skipped += 1
             continue
-        work_items.append((go_file, pair))
+        work_items.append((task_paths, pair))
 
     records: list[EvaluationRecord] = []
     print_lock = threading.Lock()
 
-    def _eval_one(go_file: Path, pair: dict) -> tuple[Path, dict, EvaluationRecord]:
+    def _eval_one(task_paths, pair: dict):
         """Evaluate a single file — called from the thread pool."""
-        generated_code = go_file.read_text(encoding="utf-8")
+        generated_code = task_paths.translation_go.read_text(encoding="utf-8")
         test_code = pair["test"]
-        log_eval_start(go_file.name)
+        solution_source, test_source = prepare_evaluation_sources(generated_code, test_code)
+        write_text(task_paths.evaluation_solution_go, solution_source)
+        write_text(task_paths.evaluation_test_go, test_source)
+        log_eval_start(task_paths.task_name)
         record = evaluate_single_task(
             task_id=pair["task_id"],
             generated_code=generated_code,
             test_code=test_code,
             timeout=timeout,
         )
-        _handle_eval_record(record, go_file.name, provider, variant, experiment, model_id_str)
-        return go_file, pair, record
+        write_json(task_paths.evaluation_result_json, record.model_dump())
+        _handle_eval_record(record, task_paths.task_name, provider, variant, experiment, model_id_str)
+        return task_paths, pair, record
 
     with Progress() as progress:
-        task = progress.add_task("Evaluating...", total=len(go_files))
+        task = progress.add_task("Evaluating...", total=len(task_dirs))
 
         # Account for skipped files in progress
         if skipped:
@@ -723,32 +871,32 @@ def _evaluate_humaneval_x(
         try:
             with ThreadPoolExecutor(max_workers=batch_size) as executor:
                 futures = {
-                    executor.submit(_eval_one, go_file, pair): (go_file, pair)
-                    for go_file, pair in work_items
+                    executor.submit(_eval_one, task_paths, pair): (task_paths, pair)
+                    for task_paths, pair in work_items
                 }
 
                 for future in as_completed(futures):
                     try:
-                        go_file, pair, record = future.result()
+                        task_paths, pair, record = future.result()
 
                         status = "[green]PASS[/green]" if record.pass_at_1 else (
                             "[yellow]COMPILE[/yellow]" if record.compiles else "[red]FAIL[/red]"
                         )
                         with print_lock:
-                            progress.console.print(f"  {status} {go_file.name} ({pair['task_id']})")
+                            progress.console.print(f"  {status} {task_paths.task_name} ({pair['task_id']})")
                             if record.notes:
                                 progress.console.print(f"         [dim]{record.notes[:100]}[/dim]")
 
                         records.append(record)
                     except Exception as exc:
-                        go_file, pair = futures[future]
+                        task_paths, pair = futures[future]
                         with print_lock:
                             progress.console.print(
-                                f"  [red]ERROR[/red] {go_file.name}: {exc}"
+                                f"  [red]ERROR[/red] {task_paths.task_name}: {exc}"
                             )
                         records.append(EvaluationRecord(
                             source_file=pair["task_id"],
-                            target_file=go_file.name,
+                            target_file=task_paths.task_name,
                             dataset="humaneval-x",
                             notes=f"Worker error: {exc}",
                         ))
@@ -761,96 +909,15 @@ def _evaluate_humaneval_x(
     _reporting.display_per_file_table(records, dataset="humaneval-x")
     summary = _reporting.compute_summary(records, dataset="humaneval-x")
     _reporting.display_summary_table(summary)
-
-    # Log to MLflow
-    _log_mlflow_run(
+    append_jsonl(run_paths.per_task_jsonl, [record.model_dump() for record in records])
+    write_json(run_paths.summary_json, summary)
+    _maybe_write_rag_diagnostics(
         provider=provider,
         variant=variant,
         experiment=experiment,
-        backend=backend,
-        summary=summary,
-        records=records,
-        target_dir=eval_target_dir,
         run_id=run_id,
+        run_paths=run_paths,
     )
-
-
-def _log_mlflow_run(
-    provider: str,
-    variant: str,
-    experiment: str,
-    backend: str | None,
-    summary: dict,
-    records: list[EvaluationRecord],
-    target_dir: Path,
-    run_id: int | None = None,
-) -> None:
-    """Log evaluation results to MLflow."""
-    import mlflow
-    import re
-
-    console = Console()
-
-    # Extract dimensions from backend label (e.g. "vec-chroma-768" -> 768)
-    dims = None
-    if backend and (m := re.search(r"-(\d+)$", backend)):
-        dims = int(m.group(1))
-
-    mlflow.set_experiment("thesis-code-translation")
-
-    run_name = f"{provider}/{variant}"
-    if backend:
-        run_name += f"/{backend}"
-    if run_id is not None:
-        run_name += f"/run-{run_id}"
-    run_name += f"/{experiment}"
-
-    with mlflow.start_run(run_name=run_name):
-        # Parameters
-        params = {
-            "provider": provider,
-            "variant": variant,
-            "experiment": experiment,
-            "dataset": summary.get("dataset", "humaneval-x"),
-        }
-        if backend:
-            params["embedding_backend"] = backend
-        if dims:
-            params["embedding_dimensions"] = dims
-        if run_id is not None:
-            params["run_id"] = run_id
-
-        # Add KB toggles
-        from src.rag.retriever import get_active_kb_toggles
-        toggles = get_active_kb_toggles(experiment)
-        if toggles:
-            for key, enabled in toggles.items():
-                params[f"kb_{key}"] = enabled
-
-        mlflow.log_params(params)
-
-        # Metrics (as percentages for readability)
-        mlflow.log_metrics({
-            "total_files": summary["total_files"],
-            "compilation_at_1": round(summary["compilation_at_1"] * 100, 1),
-            "pass_at_1": round(summary["pass_at_1"] * 100, 1),
-        })
-
-        # Log per-file results as artifact
-        import json
-        artifact_data = {
-            "provider": provider,
-            "model": variant,
-            "strategy": experiment,
-            "backend": backend,
-            "summary": summary,
-            "records": [r.model_dump() for r in records],
-        }
-        artifact_path = target_dir / "mlflow_results.json"
-        artifact_path.write_text(json.dumps(artifact_data, indent=2), encoding="utf-8")
-        mlflow.log_artifact(str(artifact_path))
-
-    console.print(f"\n[bold green]MLflow:[/bold green] Run logged as '{run_name}'")
 
 
 # ---------------------------------------------------------------------------
@@ -875,7 +942,7 @@ def _run_experiment_subprocess(args: tuple) -> None:
     from src.providers.registry import enable_model
     enable_model(provider_key, variant_key)
     _translate_humaneval_x(
-        HUMANEVAL_X_TARGET_DIR,
+        HUMANEVAL_X_DIR,
         skip_preflight=True,
         sample=sample,
         experiment=experiment,

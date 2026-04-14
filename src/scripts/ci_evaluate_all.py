@@ -1,6 +1,6 @@
 """CI evaluation script: evaluate all HumanEval-X experiment folders.
 
-Discovers experiment folders under data/translation/target/humaneval-x/,
+Discovers experiment folders under data/translation/humaneval-x/,
 runs Docker-based evaluation on each, and produces:
   - Per-experiment JSON results
   - Markdown comparison table
@@ -29,11 +29,13 @@ from src.core.docker_eval import (
     ensure_go_image,
     ensure_go_mod_cache,
     evaluate_single_task,
+    prepare_evaluation_sources,
     DEFAULT_GO_IMAGE,
 )
+from src.core.humaneval_artifacts import HumanEvalRunPaths, is_humaneval_run_root, parse_humaneval_run_root, write_json, write_text
 from src.core.reporting import compute_summary
 from src.core.schemas import EvaluationRecord
-from src.config import HUMANEVAL_X_TARGET_DIR, load_eval_config
+from src.config import HUMANEVAL_X_DIR, load_eval_config
 
 from rich.console import Console
 
@@ -44,80 +46,22 @@ console = Console()
 # ---------------------------------------------------------------------------
 
 def discover_experiment_dirs(root: Path) -> list[tuple[str, str, str, Path]]:
-    """Find all experiment directories: (provider, model, strategy[/backend], path).
-
-    Supports both legacy flat structure and new run-N structure:
-        Legacy:  provider/model/baseline/Go_*.go
-        Legacy:  provider/model/vec-chroma-768/rag-full/Go_*.go
-        New:     provider/model/baseline/run-1/Go_*.go
-        New:     provider/model/vec-chroma-768/run-1/rag-full/Go_*.go
-    """
+    """Find all experiment run roots: (provider, model, strategy[/backend], path)."""
     experiments: list[tuple[str, str, str, Path]] = []
     if not root.is_dir():
         return experiments
 
-    for provider_dir in sorted(root.iterdir()):
-        if not provider_dir.is_dir() or provider_dir.name.startswith("."):
+    for run_root in sorted(path for path in root.rglob("*") if is_humaneval_run_root(path)):
+        relative_parts = run_root.relative_to(root).parts
+        if any(part.startswith(".") for part in relative_parts):
             continue
-        for model_dir in sorted(provider_dir.iterdir()):
-            if not model_dir.is_dir() or model_dir.name.startswith("."):
-                continue
-            for strategy_dir in sorted(model_dir.iterdir()):
-                if not strategy_dir.is_dir() or strategy_dir.name.startswith("."):
-                    continue
-
-                # Check for Go files at depth 3 (legacy: baseline/Go_*.go)
-                go_files_d3 = list(strategy_dir.glob("Go_*.go"))
-                if go_files_d3:
-                    experiments.append((
-                        provider_dir.name,
-                        model_dir.name,
-                        strategy_dir.name,
-                        strategy_dir,
-                    ))
-                    continue
-
-                for sub_dir in sorted(strategy_dir.iterdir()):
-                    if not sub_dir.is_dir() or sub_dir.name.startswith("."):
-                        continue
-
-                    if sub_dir.name.startswith("run-"):
-                        # New run-N structure
-                        # baseline/run-N/Go_*.go
-                        go_in_run = list(sub_dir.glob("Go_*.go"))
-                        if go_in_run:
-                            strategy_name = f"{strategy_dir.name}/{sub_dir.name}"
-                            experiments.append((
-                                provider_dir.name,
-                                model_dir.name,
-                                strategy_name,
-                                sub_dir,
-                            ))
-                        else:
-                            # backend/run-N/experiment/Go_*.go
-                            for exp_dir in sorted(sub_dir.iterdir()):
-                                if not exp_dir.is_dir() or exp_dir.name.startswith("."):
-                                    continue
-                                go_in_exp = list(exp_dir.glob("Go_*.go"))
-                                if go_in_exp:
-                                    strategy_name = f"{strategy_dir.name}/{sub_dir.name}/{exp_dir.name}"
-                                    experiments.append((
-                                        provider_dir.name,
-                                        model_dir.name,
-                                        strategy_name,
-                                        exp_dir,
-                                    ))
-                    else:
-                        # Legacy depth 4: backend/experiment/Go_*.go
-                        go_files_d4 = list(sub_dir.glob("Go_*.go"))
-                        if go_files_d4:
-                            strategy_name = f"{strategy_dir.name}/{sub_dir.name}"
-                            experiments.append((
-                                provider_dir.name,
-                                model_dir.name,
-                                strategy_name,
-                                sub_dir,
-                            ))
+        provider, model, experiment, backend, run_id = parse_humaneval_run_root(run_root)
+        strategy_name = "baseline"
+        if experiment != "baseline":
+            strategy_name = f"{backend}/run-{run_id}/{experiment}"
+        elif run_id is not None:
+            strategy_name = f"baseline/run-{run_id}"
+        experiments.append((provider, model, strategy_name, run_root))
 
     return experiments
 
@@ -138,51 +82,53 @@ def evaluate_experiment(
         task_num = pair["task_id"].split("/")[1]
         task_lookup[task_num] = pair
 
-    go_files = sorted(
-        target_dir.glob("Go_*.go"),
-        key=lambda f: int(f.stem.replace("Go_", "")),
-    )
-
-    if not go_files:
+    run_paths = HumanEvalRunPaths(target_dir)
+    task_paths = run_paths.iter_task_dirs()
+    if not task_paths:
         return []
 
-    work_items: list[tuple[Path, dict]] = []
-    for go_file in go_files:
-        task_num = go_file.stem.replace("Go_", "")
+    work_items: list[tuple[object, dict]] = []
+    for task_path in task_paths:
+        task_num = task_path.task_name.replace("Go_", "")
         pair = task_lookup.get(task_num)
         if pair is not None:
-            work_items.append((go_file, pair))
+            work_items.append((task_path, pair))
 
     records: list[EvaluationRecord] = []
 
-    def _eval_one(go_file: Path, pair: dict) -> EvaluationRecord:
-        generated_code = go_file.read_text(encoding="utf-8")
-        return evaluate_single_task(
+    def _eval_one(task_path, pair: dict) -> EvaluationRecord:
+        generated_code = task_path.translation_go.read_text(encoding="utf-8")
+        solution_source, test_source = prepare_evaluation_sources(generated_code, pair["test"])
+        write_text(task_path.evaluation_solution_go, solution_source)
+        write_text(task_path.evaluation_test_go, test_source)
+        record = evaluate_single_task(
             task_id=pair["task_id"],
             generated_code=generated_code,
             test_code=pair["test"],
             timeout=timeout,
         )
+        write_json(task_path.evaluation_result_json, record.model_dump())
+        return record
 
     with ThreadPoolExecutor(max_workers=batch_size) as executor:
         futures = {
-            executor.submit(_eval_one, gf, p): (gf, p)
-            for gf, p in work_items
+            executor.submit(_eval_one, task_path, p): (task_path, p)
+            for task_path, p in work_items
         }
         for future in as_completed(futures):
-            gf, p = futures[future]
+            task_path, p = futures[future]
             try:
                 record = future.result()
                 status = "PASS" if record.pass_at_1 else (
                     "COMPILE" if record.compiles else "FAIL"
                 )
-                console.print(f"  [{status}] {gf.name}")
+                console.print(f"  [{status}] {task_path.task_name}")
                 records.append(record)
             except Exception as exc:
-                console.print(f"  [ERROR] {gf.name}: {exc}")
+                console.print(f"  [ERROR] {task_path.task_name}: {exc}")
                 records.append(EvaluationRecord(
                     source_file=p["task_id"],
-                    target_file=gf.name,
+                    target_file=task_path.task_name,
                     dataset="humaneval-x",
                     notes=f"Worker error: {exc}",
                 ))
@@ -284,7 +230,7 @@ def generate_plot(all_results: list[dict], output_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate all HumanEval-X experiments")
     parser.add_argument("--batch-size", type=int, default=None, help="Override parallel batch size")
-    parser.add_argument("--root", type=str, default=None, help="Root directory to search for experiments (default: HUMANEVAL_X_TARGET_DIR)")
+    parser.add_argument("--root", type=str, default=None, help="Root directory to search for experiments (default: HUMANEVAL_X_DIR)")
     parser.add_argument("--output-dir", type=str, default=None, help="Directory to save results (default: results/)")
     args = parser.parse_args()
 
@@ -314,7 +260,7 @@ def main() -> None:
     console.print("[green]OK[/green]   Go module cache ready\n")
 
     # Discover experiments
-    search_root = Path(args.root) if args.root else HUMANEVAL_X_TARGET_DIR
+    search_root = Path(args.root) if args.root else HUMANEVAL_X_DIR
     experiments = discover_experiment_dirs(search_root)
     if not experiments:
         console.print("[yellow]No experiment folders found under "
@@ -323,7 +269,7 @@ def main() -> None:
 
     console.print(f"Found [bold]{len(experiments)}[/bold] experiment(s):\n")
     for provider, model, strategy, path in experiments:
-        go_count = len(list(path.glob("Go_*.go")))
+        go_count = len([task for task in HumanEvalRunPaths(path).iter_task_dirs() if task.translation_go.exists()])
         console.print(f"  • {provider}/{model}/{strategy} ({go_count} files)")
     console.print()
 

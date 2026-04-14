@@ -8,15 +8,18 @@ Run all tests:    uv run pytest src/tests/test_docker_eval.py -v
 import pytest
 
 from src.core.docker_eval import (
-    strip_markdown_fences,
     _extract_declarations,
     _extract_imports,
     build_solution_file,
     build_test_file,
     build_combined_source,
     check_docker_available,
+    ensure_package_declaration,
     ensure_go_mod_cache,
     run_in_docker,
+    infer_test_imports,
+    prepare_evaluation_sources,
+    strip_markdown_fences,
     evaluate_single_task,
 )
 
@@ -38,6 +41,45 @@ class TestStripMarkdownFences:
     def test_no_fences_unchanged(self):
         code = "func Add(a, b int) int { return a + b }"
         assert strip_markdown_fences(code) == code
+
+
+# ---------------------------------------------------------------------------
+# infer_test_imports
+# ---------------------------------------------------------------------------
+
+
+class TestInferTestImports:
+    def test_infers_default_imports_only(self):
+        test_code = "func TestAdd(t *testing.T) { assert.True(t, Add(1, 2) == 3) }"
+        assert infer_test_imports(test_code) == [
+            "github.com/stretchr/testify/assert",
+            "testing",
+        ]
+
+    def test_infers_known_stdlib_imports_from_prefixes(self):
+        test_code = (
+            "func TestHelpers(t *testing.T) {\n"
+            "    _ = rand.New(rand.NewSource(42))\n"
+            "    _ = time.Now()\n"
+            "    _ = math.Abs(-1)\n"
+            "    _ = strings.TrimSpace(\" hi \")\n"
+            "}\n"
+        )
+        assert infer_test_imports(test_code) == [
+            "github.com/stretchr/testify/assert",
+            "math",
+            "math/rand",
+            "strings",
+            "testing",
+            "time",
+        ]
+
+    def test_ignores_unknown_qualified_prefixes(self):
+        test_code = "func TestFoo(t *testing.T) { _ = custompkg.DoThing() }"
+        assert infer_test_imports(test_code) == [
+            "github.com/stretchr/testify/assert",
+            "testing",
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -167,25 +209,23 @@ class TestExtractImports:
 
 
 class TestBuildSolutionFile:
-    def test_wraps_with_package_and_imports(self):
+    def test_preserves_existing_package_and_imports(self):
         generated = (
             "package main\n"
             "\n"
-            'import "math"\n'
+            'import str "strings"\n'
             "\n"
-            "func Solve(x float64) float64 {\n"
-            "    return math.Sqrt(x)\n"
+            "func Solve(x string) bool {\n"
+            '    return str.HasPrefix(x, "a")\n'
             "}"
         )
         result = build_solution_file(generated)
         assert result.startswith("package main\n")
-        assert '"math"' in result
-        assert "func Solve(x float64) float64 {" in result
-        # Only one package declaration
+        assert 'import str "strings"' in result
+        assert "func Solve(x string) bool {" in result
         assert result.count("package main") == 1
 
-    def test_handles_bare_function(self):
-        """HumanEval-X format: no package, just imports + function."""
+    def test_handles_bare_function_by_adding_package_only(self):
         generated = (
             "import (\n"
             '    "math"\n'
@@ -199,6 +239,7 @@ class TestBuildSolutionFile:
         assert result.startswith("package main\n")
         assert '"math"' in result
         assert "func HasCloseElements" in result
+        assert "return true" in result
 
     def test_strips_markdown_fences(self):
         generated = (
@@ -207,6 +248,41 @@ class TestBuildSolutionFile:
         result = build_solution_file(generated)
         assert "```" not in result
         assert "func Add" in result
+
+    def test_preserves_main_function(self):
+        generated = (
+            "func helper() int { return 1 }\n\n"
+            "func main() {\n"
+            "    _ = helper()\n"
+            "}\n"
+        )
+        result = build_solution_file(generated)
+        assert result.startswith("package main\n")
+        assert "func main()" in result
+
+
+class TestPrepareEvaluationSources:
+    def test_prepare_evaluation_sources_is_near_verbatim(self):
+        generated = 'import str "strings"\n\nfunc Solve(x string) bool { return str.HasPrefix(x, "a") }\n'
+        solution_source, test_source = prepare_evaluation_sources(
+            generated,
+            "func TestSolve(t *testing.T) { assert.True(t, Solve(\"abc\")) }",
+        )
+        assert solution_source.startswith("package main\n")
+        assert 'import str "strings"' in solution_source
+        assert "str.HasPrefix" in solution_source
+        assert test_source.startswith("package main\n")
+        assert '"testing"' in test_source
+
+
+class TestEnsurePackageDeclaration:
+    def test_adds_package_when_missing(self):
+        result = ensure_package_declaration("func Solve() {}\n")
+        assert result.startswith("package main\n")
+
+    def test_leaves_existing_package_unchanged(self):
+        result = ensure_package_declaration("package gcd\n\nfunc Solve() {}\n")
+        assert result.startswith("package gcd\n")
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +316,19 @@ class TestBuildTestFile:
         test_code = "func TestFoo(t *testing.T) {\n    _ = time.Now()\n}"
         result = build_test_file(test_code)
         assert '"time"' in result
+
+    def test_detects_multiple_mapping_driven_imports(self):
+        test_code = (
+            "func TestFoo(t *testing.T) {\n"
+            "    _ = reflect.DeepEqual([]int{1}, []int{1})\n"
+            "    _ = strings.HasPrefix(\"abc\", \"a\")\n"
+            "    _ = strconv.Itoa(42)\n"
+            "}\n"
+        )
+        result = build_test_file(test_code)
+        assert '"reflect"' in result
+        assert '"strings"' in result
+        assert '"strconv"' in result
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +376,11 @@ class TestDockerIntegration:
     @pytest.fixture(autouse=True, scope="class")
     def _setup_mod_cache(self):
         """Ensure Go module cache is populated before running tests."""
+        from rich.console import Console
+
+        console = Console()
+        if not check_docker_available(console):
+            pytest.skip("Docker daemon is not available")
         ensure_go_mod_cache()
 
     def test_check_docker_available(self):

@@ -2,7 +2,7 @@
 """Generate variance report and statistical plots from the re-evaluation jsonl.
 
 Reads .doc/memory/reeval_20260409_133712.jsonl (the canonical re-evaluation log,
-NOT the stale per-experiment mlflow_results.json files), computes descriptive
+not the per-run summary artifacts under data/translation/humaneval-x), computes descriptive
 statistics + ANOVA / pairwise Welch's t-tests for the MiniMax M2.5 dimension
 variance experiment, renders all selected plots, and assembles a single
 Markdown report with computed interpretations beneath every figure.
@@ -82,29 +82,52 @@ class ParsedRow:
     pass_at_1: float
 
 
+def warn(message: str):
+    console.print(f"[yellow]{message}[/yellow]")
+
+
+def _parse_run_id(token: str, target: str) -> int:
+    prefix, sep, value = token.partition("-")
+    if prefix != "run" or sep != "-" or not value.isdigit():
+        raise ValueError(f"Unrecognised run segment in target: {target}")
+    return int(value)
+
+
 def parse_target(target: str) -> tuple[str, str, str | None, int | None, str, int | None]:
     """Split a target path into (provider, model, backend, dimension, experiment, run_id)."""
     parts = target.split("/")
+    if len(parts) < 3 or not parts[0] or not parts[1]:
+        raise ValueError(f"Unrecognised target shape: {target}")
+
     provider = parts[0]
     model = parts[1]
     rest = parts[2:]
 
     if rest == ["baseline"]:
         return provider, model, None, None, "baseline", None
+    if len(rest) == 2 and rest[0] == "baseline":
+        return provider, model, None, None, "baseline", _parse_run_id(rest[1], target)
 
-    backend = rest[0]
-    dimension: int | None = None
-    if backend.startswith("vec-chroma-"):
-        dimension = int(backend.split("-")[-1])
-
-    if len(rest) == 3 and rest[1].startswith("run-"):
-        run_id = int(rest[1].split("-", 1)[1])
-        experiment = rest[2]
-    elif len(rest) == 2:
+    if len(rest) == 2:
+        backend = rest[0]
         run_id = 1
         experiment = rest[1]
+    elif len(rest) == 3 and rest[1].startswith("run-"):
+        backend = rest[0]
+        run_id = _parse_run_id(rest[1], target)
+        experiment = rest[2]
     else:
         raise ValueError(f"Unrecognised target shape: {target}")
+
+    if not backend or backend == "baseline" or not experiment:
+        raise ValueError(f"Unrecognised target shape: {target}")
+
+    dimension: int | None = None
+    if backend.startswith("vec-chroma-"):
+        try:
+            dimension = int(backend.split("-")[-1])
+        except ValueError as exc:
+            raise ValueError(f"Unrecognised target shape: {target}") from exc
 
     return provider, model, backend, dimension, experiment, run_id
 
@@ -121,26 +144,44 @@ def parse_summary(summary: str) -> tuple[float, float]:
 def load_jsonl(path: Path) -> list[ParsedRow]:
     rows: list[ParsedRow] = []
     with path.open(encoding="utf-8") as fh:
-        for raw in fh:
+        for row_num, raw in enumerate(fh, start=1):
             raw = raw.strip()
             if not raw:
                 continue
             obj = json.loads(raw)
             if not obj.get("success"):
                 continue
-            target = obj["target"]
-            summary = obj["summary"]
+            target = obj.get("target")
+            summary = obj.get("summary")
+            safe_target = target if isinstance(target, str) and target else "<missing target>"
+
+            if not isinstance(target, str) or not target:
+                warn(f"Skipping malformed successful row {row_num}: {safe_target} (missing target)")
+                continue
+            if not isinstance(summary, str) or not summary:
+                warn(f"Skipping malformed successful row {row_num}: {safe_target} (missing summary)")
+                continue
             try:
                 provider, model, backend, dim, exp, run_id = parse_target(target)
                 comp, passed = parse_summary(summary)
-            except (ValueError, KeyError) as e:
-                console.print(f"[yellow]Skipping malformed row: {target} ({e})[/yellow]")
+            except ValueError as e:
+                warn(f"Skipping malformed successful row {row_num}: {safe_target} ({e})")
                 continue
             rows.append(ParsedRow(provider, model, backend, dim, exp, run_id, comp, passed))
     return rows
 
 
 def build_dataframe(rows: list[ParsedRow]) -> pd.DataFrame:
+    columns = [
+        "provider",
+        "model",
+        "backend",
+        "dimension",
+        "experiment",
+        "run_id",
+        "compilation_at_1",
+        "pass_at_1",
+    ]
     return pd.DataFrame(
         [
             {
@@ -154,8 +195,59 @@ def build_dataframe(rows: list[ParsedRow]) -> pd.DataFrame:
                 "pass_at_1": r.pass_at_1,
             }
             for r in rows
-        ]
+        ],
+        columns=columns,
     )
+
+
+def aggregate_baseline_runs(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    baseline_rows = df[df["experiment"] == "baseline"].copy()
+    non_baseline_rows = df[df["experiment"] != "baseline"].copy()
+
+    if "baseline_runs" not in non_baseline_rows.columns:
+        non_baseline_rows["baseline_runs"] = 0
+
+    if baseline_rows.empty:
+        return non_baseline_rows.reset_index(drop=True)
+
+    aggregated = (
+        baseline_rows.groupby(["provider", "model"], as_index=False)
+        .agg(
+            compilation_at_1=("compilation_at_1", "mean"),
+            pass_at_1=("pass_at_1", "mean"),
+            baseline_runs=("provider", "size"),
+        )
+    )
+    aggregated["backend"] = None
+    aggregated["dimension"] = None
+    aggregated["experiment"] = "baseline"
+    aggregated["run_id"] = None
+
+    columns = [
+        "provider",
+        "model",
+        "backend",
+        "dimension",
+        "experiment",
+        "run_id",
+        "compilation_at_1",
+        "pass_at_1",
+        "baseline_runs",
+    ]
+    non_baseline_rows = non_baseline_rows.reindex(columns=columns)
+    aggregated = aggregated.reindex(columns=columns)
+    records = non_baseline_rows.to_dict("records") + aggregated.to_dict("records")
+    return pd.DataFrame(records, columns=columns)
+
+
+def get_provider_baseline(df: pd.DataFrame, provider: str) -> pd.Series | None:
+    baseline_rows = df[(df["provider"] == provider) & (df["experiment"] == "baseline")]
+    if baseline_rows.empty:
+        return None
+    return baseline_rows.iloc[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -523,6 +615,9 @@ def plot_significance(df_chroma: pd.DataFrame, metric: str, out_path: Path):
 
 def plot_baselines_compare(df: pd.DataFrame, out_path: Path):
     baselines = df[df["experiment"] == "baseline"].copy()
+    if baselines.empty:
+        warn("Skipping baseline comparison plot: no baseline rows available.")
+        return False
     baselines["label"] = baselines["provider"] + "/" + baselines["model"]
     baselines = baselines.sort_values("provider")
     labels = baselines["label"].tolist()
@@ -546,11 +641,18 @@ def plot_baselines_compare(df: pd.DataFrame, out_path: Path):
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0%}"))
     ax.legend(loc="lower right", framealpha=0.9)
     save_fig(fig, out_path)
+    return True
 
 
 def plot_openai_rag(df: pd.DataFrame, out_path: Path):
     openai_rag = df[(df["provider"] == "openai") & (df["experiment"] != "baseline")].copy()
-    openai_baseline = df[(df["provider"] == "openai") & (df["experiment"] == "baseline")].iloc[0]
+    openai_baseline = get_provider_baseline(df, "openai")
+    if openai_baseline is None:
+        warn("Skipping OpenAI RAG plot: missing OpenAI baseline.")
+        return False
+    if openai_rag.empty:
+        warn("Skipping OpenAI RAG plot: missing OpenAI RAG rows.")
+        return False
 
     fig, ax = plt.subplots(figsize=(10, 6))
     width = 0.35
@@ -573,6 +675,7 @@ def plot_openai_rag(df: pd.DataFrame, out_path: Path):
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{x:.0%}"))
     ax.legend(loc="lower right", framealpha=0.9, fontsize=8)
     save_fig(fig, out_path)
+    return True
 
 
 def plot_minimax_vec_gemini_vs_chroma(df: pd.DataFrame, out_path: Path):
@@ -582,6 +685,9 @@ def plot_minimax_vec_gemini_vs_chroma(df: pd.DataFrame, out_path: Path):
     vec_gemini = df[
         (df["provider"] == "minimax") & (df["model"] == "M2.5") & (df["backend"] == "vec-gemini")
     ]
+    if chroma_3072.empty or vec_gemini.empty:
+        warn("Skipping MiniMax vec-gemini vs. chroma-3072 plot: missing comparison inputs.")
+        return False
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 6), sharey=True)
     metrics = ["pass_at_1", "compilation_at_1"]
@@ -622,18 +728,19 @@ def plot_minimax_vec_gemini_vs_chroma(df: pd.DataFrame, out_path: Path):
     axes[0].legend(loc="lower right", framealpha=0.9, fontsize=8)
     fig.suptitle("MiniMax M2.5 — vec-gemini vs. chroma-3072 embedding backends", fontsize=13)
     save_fig(fig, out_path)
+    return True
 
 
 def plot_best_config_per_model(df: pd.DataFrame, out_path: Path):
     """For each provider, find the highest-mean RAG config (per pass_at_1) and compare to baseline."""
     rows = []
     for provider in ["gemini", "minimax", "openai"]:
-        baseline_row = df[(df["provider"] == provider) & (df["experiment"] == "baseline")]
-        if baseline_row.empty:
+        baseline_row = get_provider_baseline(df, provider)
+        if baseline_row is None:
             continue
-        baseline_pass = baseline_row["pass_at_1"].iloc[0]
-        baseline_comp = baseline_row["compilation_at_1"].iloc[0]
-        model = baseline_row["model"].iloc[0]
+        baseline_pass = baseline_row["pass_at_1"]
+        baseline_comp = baseline_row["compilation_at_1"]
+        model = baseline_row["model"]
 
         rag_rows = df[(df["provider"] == provider) & (df["experiment"] != "baseline")]
         if rag_rows.empty:
@@ -659,6 +766,10 @@ def plot_best_config_per_model(df: pd.DataFrame, out_path: Path):
             "best_comp": best_comp,
             "best_label": best_label,
         })
+
+    if not rows:
+        warn("Skipping best-config-per-model plot: no provider baselines available.")
+        return []
 
     fig, ax = plt.subplots(figsize=(11, 6))
     labels = [f"{r['provider']}/{r['model']}" for r in rows]
@@ -819,7 +930,16 @@ def render_report(
     output_path: Path,
     best_per_model: list[dict],
 ):
-    minimax_baseline = df[(df["provider"] == "minimax") & (df["experiment"] == "baseline")].iloc[0]
+    minimax_baseline = get_provider_baseline(df, "minimax")
+    baselines = df[df["experiment"] == "baseline"].sort_values("provider")
+    openai_baseline = get_provider_baseline(df, "openai")
+    openai_rag = df[(df["provider"] == "openai") & (df["experiment"] != "baseline")]
+    chroma_3072 = df[
+        (df["provider"] == "minimax") & (df["model"] == "M2.5") & (df["backend"] == "vec-chroma-3072")
+    ]
+    vec_gemini = df[
+        (df["provider"] == "minimax") & (df["model"] == "M2.5") & (df["backend"] == "vec-gemini")
+    ]
 
     lines: list[str] = []
     lines.append("# Dimension Variance & Cross-Model Report")
@@ -830,21 +950,36 @@ def render_report(
     # Executive summary
     lines.append("## Executive Summary")
     lines.append("")
-    primary_metric = "pass_at_1"
-    desc_pass = descriptive_table(df_chroma, primary_metric)
-    overall_pass = desc_pass["mean"].mean()
-    by_dim_pass = desc_pass.groupby("dimension")["mean"].mean()
-    best_dim_pass = int(by_dim_pass.idxmax())
-    anova_pass = anova_table(df_chroma, primary_metric)
-    n_sig_pass = int(anova_pass["significant"].sum())
+    n_sig_pass = 0
+    if not df_chroma.empty:
+        primary_metric = "pass_at_1"
+        desc_pass = descriptive_table(df_chroma, primary_metric)
+        overall_pass = desc_pass["mean"].mean()
+        by_dim_pass = desc_pass.groupby("dimension")["mean"].mean()
+        best_dim_pass = int(by_dim_pass.idxmax())
+        anova_pass = anova_table(df_chroma, primary_metric)
+        n_sig_pass = int(anova_pass["significant"].sum())
 
-    lines.append(
-        f"Across all (variant × dimension) cells the MiniMax M2.5 RAG pipeline averages "
-        f"**{fmt_pct(overall_pass)}** Pass@1 versus a no-RAG baseline of **{fmt_pct(minimax_baseline['pass_at_1'])}**. "
-        f"Averaged across variants, dimension **{best_dim_pass}** achieves the highest mean Pass@1 "
-        f"({fmt_pct(by_dim_pass[best_dim_pass])}). One-way ANOVA finds a significant dimension effect "
-        f"in **{n_sig_pass}/{len(VARIANTS)}** RAG variants at p<0.05."
-    )
+        if minimax_baseline is not None:
+            lines.append(
+                f"Across all (variant × dimension) cells the MiniMax M2.5 RAG pipeline averages "
+                f"**{fmt_pct(overall_pass)}** Pass@1 versus a no-RAG baseline of **{fmt_pct(minimax_baseline['pass_at_1'])}**. "
+                f"Averaged across variants, dimension **{best_dim_pass}** achieves the highest mean Pass@1 "
+                f"({fmt_pct(by_dim_pass[best_dim_pass])}). One-way ANOVA finds a significant dimension effect "
+                f"in **{n_sig_pass}/{len(VARIANTS)}** RAG variants at p<0.05."
+            )
+        else:
+            warn("Omitting MiniMax baseline comparison from executive summary: missing MiniMax baseline.")
+            lines.append(
+                f"Across all (variant × dimension) cells the MiniMax M2.5 RAG pipeline averages "
+                f"**{fmt_pct(overall_pass)}** Pass@1. Averaged across variants, dimension **{best_dim_pass}** "
+                f"achieves the highest mean Pass@1 ({fmt_pct(by_dim_pass[best_dim_pass])}). "
+                f"One-way ANOVA finds a significant dimension effect in **{n_sig_pass}/{len(VARIANTS)}** "
+                f"RAG variants at p<0.05."
+            )
+    else:
+        warn("MiniMax variance section has no chroma RAG rows; executive summary is limited.")
+        lines.append("Insufficient MiniMax chroma RAG data is available to compute the dimension-variance summary.")
     lines.append("")
 
     # Inventory
@@ -856,10 +991,10 @@ def render_report(
         if sub.empty:
             continue
         model = sub["model"].iloc[0]
-        baselines = (sub["experiment"] == "baseline").sum()
-        rag = (sub["experiment"] != "baseline").sum()
+        baseline_count = int((sub["experiment"] == "baseline").sum())
+        rag = int((sub["experiment"] != "baseline").sum())
         inventory_rows.append(
-            f"| `{provider}/{model}` | {baselines} | {rag} |"
+            f"| `{provider}/{model}` | {baseline_count} | {rag} |"
         )
     lines.append("| Provider/Model | Baseline rows | RAG rows |")
     lines.append("|---|---|---|")
@@ -876,69 +1011,83 @@ def render_report(
     )
     lines.append("")
 
-    for metric in metrics:
-        metric_label = METRIC_LABELS[metric]
-        lines.append(f"### {metric_label}")
+    if df_chroma.empty:
+        lines.append("MiniMax chroma RAG rows are missing, so the variance analysis subsection is omitted.")
         lines.append("")
+    else:
+        for metric in metrics:
+            metric_label = METRIC_LABELS[metric]
+            lines.append(f"### {metric_label}")
+            lines.append("")
 
-        desc = descriptive_table(df_chroma, metric)
-        desc_display = desc.copy()
-        desc_display["dimension"] = desc_display["dimension"].astype(int)
-        lines.append("**Descriptive statistics (n=5 per cell)**")
-        lines.append("")
-        lines.append(
-            md_table(
-                desc_display,
-                ["experiment", "dimension", "n", "mean", "std", "ci95", "min", "max", "cv"],
-                ["Variant", "Dim", "n", "Mean", "SD", "95% CI±", "Min", "Max", "CV"],
-                pct_cols=["mean", "std", "ci95", "min", "max", "cv"],
-                int_cols=["n", "dimension"],
-            )
-        )
-        lines.append("")
-
-        anova = anova_table(df_chroma, metric)
-        lines.append("**One-way ANOVA across dimensions**")
-        lines.append("")
-        lines.append("| Variant | F | p-value | Significant (α=0.05) |")
-        lines.append("|---|---|---|---|")
-        for _, row in anova.iterrows():
-            sig = "✅" if row["significant"] else "—"
+            desc = descriptive_table(df_chroma, metric)
+            desc_display = desc.copy()
+            desc_display["dimension"] = desc_display["dimension"].astype(int)
+            lines.append("**Descriptive statistics (n=5 per cell)**")
+            lines.append("")
             lines.append(
-                f"| {row['experiment']} | {row['F']:.3f} | {row['p_value']:.4f} | {sig} |"
+                md_table(
+                    desc_display,
+                    ["experiment", "dimension", "n", "mean", "std", "ci95", "min", "max", "cv"],
+                    ["Variant", "Dim", "n", "Mean", "SD", "95% CI±", "Min", "Max", "CV"],
+                    pct_cols=["mean", "std", "ci95", "min", "max", "cv"],
+                    int_cols=["n", "dimension"],
+                )
             )
-        lines.append("")
-
-        sig_variants = anova[anova["significant"]]["experiment"].tolist()
-        if sig_variants:
-            lines.append("**Pairwise Welch's t-tests (only for variants with significant ANOVA)**")
-            lines.append("")
-            lines.append("| Variant | Dim A | Dim B | t | p |")
-            lines.append("|---|---|---|---|---|")
-            for variant in sig_variants:
-                pw = pairwise_ttests(df_chroma, variant, metric)
-                for _, row in pw.iterrows():
-                    lines.append(
-                        f"| {variant} | {row['dim_a']} | {row['dim_b']} | {row['t']:.3f} | {row['p']:.4f} |"
-                    )
             lines.append("")
 
-        # Embed plots with interpretations
-        plot_specs = [
-            ("Box plot — distribution across the 5 runs", f"plots/minimax/box_{metric}.png", interpret_box(df_chroma, metric)),
-            ("Grouped bars — mean ± 1 SD", f"plots/minimax/bars_{metric}.png", interpret_bars(df_chroma, metric)),
-            ("Line across dimensions with ±1 SD bands", f"plots/minimax/line_{metric}.png", interpret_line(df_chroma, minimax_baseline[metric], metric)),
-            ("Coefficient of variation per cell", f"plots/minimax/cv_{metric}.png", interpret_cv(df_chroma, metric)),
-            ("Run trajectories", f"plots/minimax/trajectory_{metric}.png", interpret_trajectory(df_chroma, metric)),
-            ("Pairwise t-test significance heatmap", f"plots/minimax/significance_{metric}.png", interpret_significance(anova, metric)),
-        ]
-        for title, rel_path, interpretation in plot_specs:
-            lines.append(f"#### {title}")
+            anova = anova_table(df_chroma, metric)
+            lines.append("**One-way ANOVA across dimensions**")
             lines.append("")
-            lines.append(f"![{title}]({rel_path})")
+            lines.append("| Variant | F | p-value | Significant (α=0.05) |")
+            lines.append("|---|---|---|---|")
+            for _, row in anova.iterrows():
+                sig = "✅" if row["significant"] else "—"
+                lines.append(
+                    f"| {row['experiment']} | {row['F']:.3f} | {row['p_value']:.4f} | {sig} |"
+                )
             lines.append("")
-            lines.append(interpretation)
-            lines.append("")
+
+            sig_variants = anova[anova["significant"]]["experiment"].tolist()
+            if sig_variants:
+                lines.append("**Pairwise Welch's t-tests (only for variants with significant ANOVA)**")
+                lines.append("")
+                lines.append("| Variant | Dim A | Dim B | t | p |")
+                lines.append("|---|---|---|---|---|")
+                for variant in sig_variants:
+                    pw = pairwise_ttests(df_chroma, variant, metric)
+                    for _, row in pw.iterrows():
+                        lines.append(
+                            f"| {variant} | {row['dim_a']} | {row['dim_b']} | {row['t']:.3f} | {row['p']:.4f} |"
+                        )
+                lines.append("")
+
+            plot_specs = [
+                ("Box plot — distribution across the 5 runs", f"plots/minimax/box_{metric}.png", interpret_box(df_chroma, metric)),
+                ("Grouped bars — mean ± 1 SD", f"plots/minimax/bars_{metric}.png", interpret_bars(df_chroma, metric)),
+                ("Coefficient of variation per cell", f"plots/minimax/cv_{metric}.png", interpret_cv(df_chroma, metric)),
+                ("Run trajectories", f"plots/minimax/trajectory_{metric}.png", interpret_trajectory(df_chroma, metric)),
+                ("Pairwise t-test significance heatmap", f"plots/minimax/significance_{metric}.png", interpret_significance(anova, metric)),
+            ]
+            if minimax_baseline is not None:
+                plot_specs.insert(
+                    2,
+                    (
+                        "Line across dimensions with ±1 SD bands",
+                        f"plots/minimax/line_{metric}.png",
+                        interpret_line(df_chroma, minimax_baseline[metric], metric),
+                    ),
+                )
+            else:
+                warn(f"Omitting MiniMax baseline-dependent line section for {metric}: missing MiniMax baseline.")
+
+            for title, rel_path, interpretation in plot_specs:
+                lines.append(f"#### {title}")
+                lines.append("")
+                lines.append(f"![{title}]({rel_path})")
+                lines.append("")
+                lines.append(interpretation)
+                lines.append("")
 
     # Section B: cross-model
     lines.append("## Section B — Cross-Model Comparison")
@@ -950,150 +1099,165 @@ def render_report(
     )
     lines.append("")
 
-    baselines = df[df["experiment"] == "baseline"].sort_values("provider")
-    lines.append("**Baseline metrics**")
-    lines.append("")
-    lines.append("| Provider/Model | Compilation@1 | Pass@1 |")
-    lines.append("|---|---|---|")
-    for _, row in baselines.iterrows():
-        lines.append(
-            f"| {row['provider']}/{row['model']} | {fmt_pct(row['compilation_at_1'])} | {fmt_pct(row['pass_at_1'])} |"
-        )
-    lines.append("")
-
-    # C1 baselines compare
-    best_baseline = baselines.loc[baselines["pass_at_1"].idxmax()]
-    worst_baseline = baselines.loc[baselines["pass_at_1"].idxmin()]
-    spread = best_baseline["pass_at_1"] - worst_baseline["pass_at_1"]
-    interp_c1 = (
-        f"The highest baseline is **{best_baseline['provider']}/{best_baseline['model']}** at "
-        f"{fmt_pct(best_baseline['pass_at_1'])} Pass@1; the lowest is "
-        f"**{worst_baseline['provider']}/{worst_baseline['model']}** at "
-        f"{fmt_pct(worst_baseline['pass_at_1'])}, a spread of **{fmt_pct(spread)}**. "
-        f"This is the no-RAG ceiling each model brings before any retrieval is added."
-    )
-    lines.append("### C1 — Baseline comparison across providers")
-    lines.append("")
-    lines.append("![baselines](plots/cross_model/baselines_compare.png)")
-    lines.append("")
-    lines.append(interp_c1)
-    lines.append("")
-
-    # C2 OpenAI RAG
-    openai_baseline = df[(df["provider"] == "openai") & (df["experiment"] == "baseline")].iloc[0]
-    openai_rag = df[(df["provider"] == "openai") & (df["experiment"] != "baseline")]
-    openai_max_pass = openai_rag["pass_at_1"].max()
-    openai_max_variant = openai_rag.loc[openai_rag["pass_at_1"].idxmax(), "experiment"]
-    delta_openai = openai_max_pass - openai_baseline["pass_at_1"]
-    direction = "improves over" if delta_openai > 0 else "regresses against"
-    interp_c2 = (
-        f"OpenAI GPT-5.4 starts from an unusually strong baseline ({fmt_pct(openai_baseline['pass_at_1'])} Pass@1, "
-        f"{fmt_pct(openai_baseline['compilation_at_1'])} Compilation@1). The best RAG variant "
-        f"(**{openai_max_variant}**) reaches {fmt_pct(openai_max_pass)} Pass@1, which {direction} the baseline "
-        f"by **{delta_openai:+.1%}**. With only 1 run per variant the difference is not statistically testable, "
-        f"but the absolute gap is small — a sign that for already-strong models RAG yields diminishing returns."
-    )
-    lines.append("### C2 — OpenAI GPT-5.4 RAG variants (chroma-3072)")
-    lines.append("")
-    lines.append("![openai-rag](plots/cross_model/openai_rag_variants.png)")
-    lines.append("")
-    lines.append(interp_c2)
-    lines.append("")
-
-    # C3 vec-gemini vs chroma-3072
-    chroma_3072_pass = df[(df["provider"] == "minimax") & (df["backend"] == "vec-chroma-3072")].groupby("experiment")["pass_at_1"].mean()
-    vec_gemini_pass = df[(df["provider"] == "minimax") & (df["backend"] == "vec-gemini")].set_index("experiment")["pass_at_1"]
-    deltas = (vec_gemini_pass - chroma_3072_pass).dropna()
-    n_better = int((deltas > 0).sum())
-    avg_delta = float(deltas.mean()) if len(deltas) else 0.0
-    interp_c3 = (
-        f"For MiniMax M2.5, the Gemini-embedding backend (`vec-gemini`, single run) outperforms the mean "
-        f"of the 5-run chroma-3072 baseline in **{n_better}/{len(deltas)}** RAG variants on Pass@1, with an "
-        f"average delta of **{avg_delta:+.1%}**. Because the chroma side is averaged over 5 runs and the "
-        f"vec-gemini side is a single observation, the comparison is biased toward seeing larger gaps than "
-        f"truly exist — read this as suggestive only."
-    )
-    lines.append("### C3 — MiniMax vec-gemini vs. chroma-3072")
-    lines.append("")
-    lines.append("![vec-gemini-vs-chroma](plots/cross_model/minimax_vec_gemini_vs_chroma.png)")
-    lines.append("")
-    lines.append(interp_c3)
-    lines.append("")
-
-    # C4 best per provider
-    best_lines = []
-    for r in best_per_model:
-        delta_pass = r["best_pass"] - r["baseline_pass"] if not math.isnan(r["best_pass"]) else float("nan")
-        if math.isnan(delta_pass):
-            best_lines.append(f"**{r['provider']}/{r['model']}** has no RAG runs to compare against its baseline ({fmt_pct(r['baseline_pass'])} Pass@1).")
-        else:
-            verb = "lifts" if delta_pass > 0 else "lowers"
-            best_lines.append(
-                f"**{r['provider']}/{r['model']}** — best RAG config `{r['best_label']}` "
-                f"{verb} Pass@1 from {fmt_pct(r['baseline_pass'])} → {fmt_pct(r['best_pass'])} ({delta_pass:+.1%})."
+    if baselines.empty:
+        warn("Omitting cross-model baseline sections: no baselines available.")
+    else:
+        lines.append("**Baseline metrics**")
+        lines.append("")
+        lines.append("| Provider/Model | Compilation@1 | Pass@1 |")
+        lines.append("|---|---|---|")
+        for _, row in baselines.iterrows():
+            lines.append(
+                f"| {row['provider']}/{row['model']} | {fmt_pct(row['compilation_at_1'])} | {fmt_pct(row['pass_at_1'])} |"
             )
-    interp_c4 = " ".join(best_lines)
-    lines.append("### C4 — Best (mean) RAG configuration vs. baseline, per provider")
-    lines.append("")
-    lines.append("![best-per-model](plots/cross_model/best_config_per_model.png)")
-    lines.append("")
-    lines.append(interp_c4)
-    lines.append("")
+        lines.append("")
+
+        best_baseline = baselines.loc[baselines["pass_at_1"].idxmax()]
+        worst_baseline = baselines.loc[baselines["pass_at_1"].idxmin()]
+        spread = best_baseline["pass_at_1"] - worst_baseline["pass_at_1"]
+        interp_c1 = (
+            f"The highest baseline is **{best_baseline['provider']}/{best_baseline['model']}** at "
+            f"{fmt_pct(best_baseline['pass_at_1'])} Pass@1; the lowest is "
+            f"**{worst_baseline['provider']}/{worst_baseline['model']}** at "
+            f"{fmt_pct(worst_baseline['pass_at_1'])}, a spread of **{fmt_pct(spread)}**. "
+            f"This is the no-RAG ceiling each model brings before any retrieval is added."
+        )
+        lines.append("### C1 — Baseline comparison across providers")
+        lines.append("")
+        lines.append("![baselines](plots/cross_model/baselines_compare.png)")
+        lines.append("")
+        lines.append(interp_c1)
+        lines.append("")
+
+    if openai_baseline is None:
+        warn("Omitting OpenAI baseline comparison section: missing OpenAI baseline.")
+    elif openai_rag.empty:
+        warn("Omitting OpenAI RAG section: missing OpenAI RAG rows.")
+    else:
+        openai_max_pass = openai_rag["pass_at_1"].max()
+        openai_max_variant = openai_rag.loc[openai_rag["pass_at_1"].idxmax(), "experiment"]
+        delta_openai = openai_max_pass - openai_baseline["pass_at_1"]
+        direction = "improves over" if delta_openai > 0 else "regresses against"
+        interp_c2 = (
+            f"OpenAI GPT-5.4 starts from an unusually strong baseline ({fmt_pct(openai_baseline['pass_at_1'])} Pass@1, "
+            f"{fmt_pct(openai_baseline['compilation_at_1'])} Compilation@1). The best RAG variant "
+            f"(**{openai_max_variant}**) reaches {fmt_pct(openai_max_pass)} Pass@1, which {direction} the baseline "
+            f"by **{delta_openai:+.1%}**. With only 1 run per variant the difference is not statistically testable, "
+            f"but the absolute gap is small — a sign that for already-strong models RAG yields diminishing returns."
+        )
+        lines.append("### C2 — OpenAI GPT-5.4 RAG variants (chroma-3072)")
+        lines.append("")
+        lines.append("![openai-rag](plots/cross_model/openai_rag_variants.png)")
+        lines.append("")
+        lines.append(interp_c2)
+        lines.append("")
+
+    if chroma_3072.empty or vec_gemini.empty:
+        warn("Omitting MiniMax vec-gemini vs. chroma-3072 section: missing comparison inputs.")
+    else:
+        chroma_3072_pass = chroma_3072.groupby("experiment")["pass_at_1"].mean()
+        vec_gemini_pass = vec_gemini.set_index("experiment")["pass_at_1"]
+        deltas = (vec_gemini_pass - chroma_3072_pass).dropna()
+        n_better = int((deltas > 0).sum())
+        avg_delta = float(deltas.mean()) if len(deltas) else 0.0
+        interp_c3 = (
+            f"For MiniMax M2.5, the Gemini-embedding backend (`vec-gemini`, single run) outperforms the mean "
+            f"of the 5-run chroma-3072 baseline in **{n_better}/{len(deltas)}** RAG variants on Pass@1, with an "
+            f"average delta of **{avg_delta:+.1%}**. Because the chroma side is averaged over 5 runs and the "
+            f"vec-gemini side is a single observation, the comparison is biased toward seeing larger gaps than "
+            f"truly exist — read this as suggestive only."
+        )
+        lines.append("### C3 — MiniMax vec-gemini vs. chroma-3072")
+        lines.append("")
+        lines.append("![vec-gemini-vs-chroma](plots/cross_model/minimax_vec_gemini_vs_chroma.png)")
+        lines.append("")
+        lines.append(interp_c3)
+        lines.append("")
+
+    if not best_per_model:
+        warn("Omitting best-config-per-model section: no provider baselines available.")
+    else:
+        best_lines = []
+        for r in best_per_model:
+            delta_pass = r["best_pass"] - r["baseline_pass"] if not math.isnan(r["best_pass"]) else float("nan")
+            if math.isnan(delta_pass):
+                best_lines.append(f"**{r['provider']}/{r['model']}** has no RAG runs to compare against its baseline ({fmt_pct(r['baseline_pass'])} Pass@1).")
+            else:
+                verb = "lifts" if delta_pass > 0 else "lowers"
+                best_lines.append(
+                    f"**{r['provider']}/{r['model']}** — best RAG config `{r['best_label']}` "
+                    f"{verb} Pass@1 from {fmt_pct(r['baseline_pass'])} → {fmt_pct(r['best_pass'])} ({delta_pass:+.1%})."
+                )
+        interp_c4 = " ".join(best_lines)
+        lines.append("### C4 — Best (mean) RAG configuration vs. baseline, per provider")
+        lines.append("")
+        lines.append("![best-per-model](plots/cross_model/best_config_per_model.png)")
+        lines.append("")
+        lines.append(interp_c4)
+        lines.append("")
 
     # Section C: conclusions
     lines.append("## Section C — Conclusions")
     lines.append("")
     bullets: list[str] = []
 
-    if n_sig_pass == 0:
+    if not df_chroma.empty and n_sig_pass == 0:
         bullets.append(
             "**Embedding dimension does not have a statistically significant effect on MiniMax M2.5 Pass@1** "
             f"in any of the {len(VARIANTS)} RAG variants tested (one-way ANOVA, α=0.05, n=5 per cell). "
             "The 768/1536/3072 dimension swap is, in this experiment, indistinguishable from run-to-run noise."
         )
-    else:
+    elif not df_chroma.empty:
         bullets.append(
             f"**Embedding dimension has a statistically significant effect in {n_sig_pass}/{len(VARIANTS)} RAG variants** "
             "for Pass@1 (one-way ANOVA, α=0.05). See the descriptive table and significance heatmap above for "
             "which dimension pairs drive the effect."
         )
 
-    desc_pass_full = descriptive_table(df_chroma, "pass_at_1")
-    best_pass_row = desc_pass_full.loc[desc_pass_full["mean"].idxmax()]
-    bullets.append(
-        f"**Highest mean Pass@1 configuration**: `{best_pass_row['experiment']}` at dimension "
-        f"`{int(best_pass_row['dimension'])}` ({fmt_pct(best_pass_row['mean'])} ± {fmt_pct(best_pass_row['std'])}). "
-        f"For comparison, the no-RAG baseline is {fmt_pct(minimax_baseline['pass_at_1'])}."
-    )
-
-    desc_pass_full_n2 = desc_pass_full[desc_pass_full["n"] > 1]
-    if not desc_pass_full_n2.empty:
-        most_stable = desc_pass_full_n2.loc[desc_pass_full_n2["cv"].idxmin()]
+    if not df_chroma.empty:
+        desc_pass_full = descriptive_table(df_chroma, "pass_at_1")
+        best_pass_row = desc_pass_full.loc[desc_pass_full["mean"].idxmax()]
         bullets.append(
-            f"**Most stable configuration across runs**: `{most_stable['experiment']}` at dimension "
-            f"`{int(most_stable['dimension'])}` (CV = {most_stable['cv']:.2%})."
+            f"**Highest mean Pass@1 configuration**: `{best_pass_row['experiment']}` at dimension "
+            f"`{int(best_pass_row['dimension'])}` ({fmt_pct(best_pass_row['mean'])} ± {fmt_pct(best_pass_row['std'])})."
+        )
+        if minimax_baseline is not None:
+            bullets[-1] += f" For comparison, the no-RAG baseline is {fmt_pct(minimax_baseline['pass_at_1'])}."
+
+        desc_pass_full_n2 = desc_pass_full[desc_pass_full["n"] > 1]
+        if not desc_pass_full_n2.empty:
+            most_stable = desc_pass_full_n2.loc[desc_pass_full_n2["cv"].idxmin()]
+            bullets.append(
+                f"**Most stable configuration across runs**: `{most_stable['experiment']}` at dimension "
+                f"`{int(most_stable['dimension'])}` (CV = {most_stable['cv']:.2%})."
+            )
+
+        if minimax_baseline is not None:
+            rag_above = (desc_pass_full["mean"] > minimax_baseline["pass_at_1"]).sum()
+            if rag_above == 0:
+                bullets.append(
+                    f"**RAG does not beat the no-RAG baseline on Pass@1 for MiniMax M2.5**: 0/{len(desc_pass_full)} "
+                    f"(variant × dim) cells exceed the baseline mean ({fmt_pct(minimax_baseline['pass_at_1'])}). "
+                    "This is the most actionable finding — the RAG retrieval pipeline as currently configured is "
+                    "either not adding useful context or is adding noise that offsets the benefit."
+                )
+            else:
+                bullets.append(
+                    f"**RAG exceeds the no-RAG baseline in {rag_above}/{len(desc_pass_full)} (variant × dim) cells "
+                    f"on Pass@1** for MiniMax M2.5."
+                )
+
+    if openai_baseline is not None and not openai_rag.empty:
+        openai_max_pass = openai_rag["pass_at_1"].max()
+        openai_helps = openai_max_pass > openai_baseline["pass_at_1"]
+        bullets.append(
+            f"**OpenAI GPT-5.4**: RAG {'improves over' if openai_helps else 'does not improve'} the strong "
+            f"{fmt_pct(openai_baseline['pass_at_1'])} baseline; best variant reaches {fmt_pct(openai_max_pass)} "
+            f"({(openai_max_pass - openai_baseline['pass_at_1']):+.1%})."
         )
 
-    rag_above = (desc_pass_full["mean"] > minimax_baseline["pass_at_1"]).sum()
-    if rag_above == 0:
-        bullets.append(
-            f"**RAG does not beat the no-RAG baseline on Pass@1 for MiniMax M2.5**: 0/{len(desc_pass_full)} "
-            f"(variant × dim) cells exceed the baseline mean ({fmt_pct(minimax_baseline['pass_at_1'])}). "
-            "This is the most actionable finding — the RAG retrieval pipeline as currently configured is "
-            "either not adding useful context or is adding noise that offsets the benefit."
-        )
-    else:
-        bullets.append(
-            f"**RAG exceeds the no-RAG baseline in {rag_above}/{len(desc_pass_full)} (variant × dim) cells "
-            f"on Pass@1** for MiniMax M2.5."
-        )
-
-    openai_helps = openai_max_pass > openai_baseline["pass_at_1"]
-    bullets.append(
-        f"**OpenAI GPT-5.4**: RAG {'improves over' if openai_helps else 'does not improve'} the strong "
-        f"{fmt_pct(openai_baseline['pass_at_1'])} baseline; best variant reaches {fmt_pct(openai_max_pass)} "
-        f"({(openai_max_pass - openai_baseline['pass_at_1']):+.1%})."
-    )
+    if not bullets:
+        bullets.append("Insufficient data was available for conclusion-level comparisons.")
 
     for b in bullets:
         lines.append(f"- {b}")
@@ -1135,11 +1299,13 @@ def main(source: Path, output_dir: Path, metric: str):
     rows = load_jsonl(source)
     console.print(f"Loaded [bold]{len(rows)}[/bold] successful rows.")
 
-    df = build_dataframe(rows)
+    df_raw = build_dataframe(rows)
+    df = aggregate_baseline_runs(df_raw)
     df_chroma = minimax_chroma(df)
+    minimax_baseline = get_provider_baseline(df, "minimax")
 
     n_chroma = len(df_chroma)
-    n_baseline_minimax = ((df["provider"] == "minimax") & (df["experiment"] == "baseline")).sum()
+    n_baseline_minimax = ((df_raw["provider"] == "minimax") & (df_raw["experiment"] == "baseline")).sum()
     n_vec_gemini = ((df["provider"] == "minimax") & (df["backend"] == "vec-gemini")).sum()
     n_openai = (df["provider"] == "openai").sum()
     n_gemini = (df["provider"] == "gemini").sum()
@@ -1155,19 +1321,24 @@ def main(source: Path, output_dir: Path, metric: str):
 
     output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = output_dir / "dimension_variance_data.csv"
-    df.to_csv(csv_path, index=False)
+    df_raw.to_csv(csv_path, index=False)
     console.print(f"[green]Wrote data dump[/green] → {csv_path}")
 
     # MiniMax variance plots
-    for m in metrics:
-        plot_box(df_chroma, m, output_dir / "plots" / "minimax" / f"box_{m}.png")
-        plot_bars(df_chroma, m, output_dir / "plots" / "minimax" / f"bars_{m}.png")
-        baseline_val = df[(df["provider"] == "minimax") & (df["experiment"] == "baseline")][m].iloc[0]
-        plot_line(df_chroma, baseline_val, m, output_dir / "plots" / "minimax" / f"line_{m}.png")
-        plot_cv(df_chroma, m, output_dir / "plots" / "minimax" / f"cv_{m}.png")
-        plot_trajectory(df_chroma, m, output_dir / "plots" / "minimax" / f"trajectory_{m}.png")
-        plot_significance(df_chroma, m, output_dir / "plots" / "minimax" / f"significance_{m}.png")
-        console.print(f"[green]Rendered MiniMax plots[/green] for {m}")
+    if df_chroma.empty:
+        warn("Skipping MiniMax variance plots: no MiniMax chroma RAG rows available.")
+    else:
+        for m in metrics:
+            plot_box(df_chroma, m, output_dir / "plots" / "minimax" / f"box_{m}.png")
+            plot_bars(df_chroma, m, output_dir / "plots" / "minimax" / f"bars_{m}.png")
+            if minimax_baseline is None:
+                warn(f"Skipping MiniMax baseline line plot for {m}: missing MiniMax baseline.")
+            else:
+                plot_line(df_chroma, minimax_baseline[m], m, output_dir / "plots" / "minimax" / f"line_{m}.png")
+            plot_cv(df_chroma, m, output_dir / "plots" / "minimax" / f"cv_{m}.png")
+            plot_trajectory(df_chroma, m, output_dir / "plots" / "minimax" / f"trajectory_{m}.png")
+            plot_significance(df_chroma, m, output_dir / "plots" / "minimax" / f"significance_{m}.png")
+            console.print(f"[green]Rendered MiniMax plots[/green] for {m}")
 
     # Cross-model plots
     plot_baselines_compare(df, output_dir / "plots" / "cross_model" / "baselines_compare.png")

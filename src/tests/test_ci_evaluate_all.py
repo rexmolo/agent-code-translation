@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from src.core.humaneval_artifacts import HumanEvalRunPaths
 from src.scripts.ci_evaluate_all import discover_experiment_dirs, build_comparison_table
 
 
@@ -15,45 +16,48 @@ from src.scripts.ci_evaluate_all import discover_experiment_dirs, build_comparis
 # ---------------------------------------------------------------------------
 
 class TestDiscoverExperimentDirs:
-    def test_finds_depth3_experiments(self, tmp_path):
-        """provider/model/strategy with Go files at depth 3."""
-        d = tmp_path / "openai" / "gpt-4" / "baseline"
-        d.mkdir(parents=True)
-        (d / "Go_0.go").write_text("package main")
-        (d / "Go_1.go").write_text("package main")
+    @staticmethod
+    def _make_task_bundle(run_root: Path, task_ids: tuple[int, ...] = (0, 1)) -> None:
+        run_paths = HumanEvalRunPaths(run_root)
+        run_paths.ensure_translation_dirs()
+        for task_id in task_ids:
+            task = run_paths.task(task_id)
+            task.translation_go.parent.mkdir(parents=True, exist_ok=True)
+            task.translation_go.write_text("package main\n", encoding="utf-8")
+
+    def test_finds_baseline_run_roots(self, tmp_path):
+        d = tmp_path / "openai" / "gpt-4" / "baseline" / "run-1"
+        self._make_task_bundle(d)
 
         results = discover_experiment_dirs(tmp_path)
         assert len(results) == 1
         provider, model, strategy, path = results[0]
         assert provider == "openai"
         assert model == "gpt-4"
-        assert strategy == "baseline"
+        assert strategy == "baseline/run-1"
         assert path == d
 
-    def test_finds_depth4_experiments(self, tmp_path):
-        """provider/model/strategy/backend with Go files at depth 4."""
-        d = tmp_path / "openai" / "gpt-4" / "rag" / "chromadb"
-        d.mkdir(parents=True)
-        (d / "Go_0.go").write_text("package main")
+    def test_finds_rag_run_roots(self, tmp_path):
+        d = tmp_path / "openai" / "gpt-4" / "vec-chroma-768" / "run-2" / "rag-full"
+        self._make_task_bundle(d, task_ids=(0,))
 
         results = discover_experiment_dirs(tmp_path)
         assert len(results) == 1
         provider, model, strategy, path = results[0]
-        assert strategy == "rag/chromadb"
+        assert strategy == "vec-chroma-768/run-2/rag-full"
         assert path == d
 
     def test_ignores_hidden_dirs(self, tmp_path):
-        d = tmp_path / ".hidden" / "model" / "strategy"
-        d.mkdir(parents=True)
-        (d / "Go_0.go").write_text("package main")
+        d = tmp_path / ".hidden" / "model" / "baseline" / "run-1"
+        self._make_task_bundle(d, task_ids=(0,))
 
         results = discover_experiment_dirs(tmp_path)
         assert len(results) == 0
 
-    def test_ignores_dirs_without_go_files(self, tmp_path):
-        d = tmp_path / "openai" / "gpt-4" / "baseline"
-        d.mkdir(parents=True)
-        (d / "notes.txt").write_text("no go files here")
+    def test_ignores_dirs_without_task_bundles(self, tmp_path):
+        d = tmp_path / "openai" / "gpt-4" / "baseline" / "run-1"
+        (d / "notes.txt").parent.mkdir(parents=True)
+        (d / "notes.txt").write_text("no task bundles here", encoding="utf-8")
 
         results = discover_experiment_dirs(tmp_path)
         assert len(results) == 0
@@ -67,15 +71,16 @@ class TestDiscoverExperimentDirs:
         assert results == []
 
     def test_multiple_experiments(self, tmp_path):
-        for name in ["baseline", "rag"]:
-            d = tmp_path / "openai" / "gpt-4" / name
-            d.mkdir(parents=True)
-            (d / "Go_0.go").write_text("package main")
+        for run_root in [
+            tmp_path / "openai" / "gpt-4" / "baseline" / "run-1",
+            tmp_path / "openai" / "gpt-4" / "vec-chroma-768" / "run-1" / "rag-full",
+        ]:
+            self._make_task_bundle(run_root, task_ids=(0,))
 
         results = discover_experiment_dirs(tmp_path)
         assert len(results) == 2
         strategies = {r[2] for r in results}
-        assert strategies == {"baseline", "rag"}
+        assert strategies == {"baseline/run-1", "vec-chroma-768/run-1/rag-full"}
 
 
 # ---------------------------------------------------------------------------

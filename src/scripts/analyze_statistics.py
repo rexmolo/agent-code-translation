@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Statistical analysis of multi-run experiment results.
 
-Discovers mlflow_results.json files, groups by dimension + experiment,
+Discovers run-level summary.json files, groups by dimension + experiment,
 runs ANOVA across dimensions and pairwise t-tests if significant.
 
 Usage:
@@ -21,36 +21,34 @@ from rich.console import Console
 from rich.table import Table
 from scipy import stats
 
-RESULTS_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "translation" / "target" / "humaneval-x"
+from src.core.humaneval_artifacts import parse_humaneval_run_root
+
+RESULTS_ROOT = Path(__file__).resolve().parent.parent.parent / "data" / "translation" / "humaneval-x"
 
 SIGNIFICANCE_LEVEL = 0.05
 
 
 def discover_results(root: Path) -> list[dict]:
-    """Find all mlflow_results.json files and extract metadata from paths."""
+    """Find all run-level summary.json files and extract metadata from paths."""
     results = []
-    for json_path in sorted(root.rglob("mlflow_results.json")):
+    for json_path in sorted(root.rglob("summary.json")):
+        if json_path.parent.name != "results" or json_path.parent.parent.name != "evaluation":
+            continue
         try:
             data = json.loads(json_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
 
-        # Extract run_id from path (look for run-N directory)
-        run_id = None
-        for part in json_path.parts:
-            if part.startswith("run-"):
-                run_id = int(part.split("-", 1)[1])
-                break
+        run_root = json_path.parents[2]
+        try:
+            provider, model, experiment, backend, run_id = parse_humaneval_run_root(run_root)
+        except (ValueError, IndexError):
+            continue
 
         # Extract dimension from backend (e.g. "vec-chroma-768" -> 768)
-        backend = data.get("backend")
         dims = None
         if backend and (m := re.search(r"-(\d+)$", backend)):
             dims = int(m.group(1))
-
-        experiment = data.get("strategy", "unknown")
-        provider = data.get("provider", "unknown")
-        model = data.get("model", "unknown")
 
         results.append({
             "path": str(json_path),
@@ -60,9 +58,9 @@ def discover_results(root: Path) -> list[dict]:
             "backend": backend,
             "dimensions": dims,
             "run_id": run_id,
-            "compilation_at_1": data["summary"]["compilation_at_1"],
-            "pass_at_1": data["summary"]["pass_at_1"],
-            "total_files": data["summary"]["total_files"],
+            "compilation_at_1": data["compilation_at_1"],
+            "pass_at_1": data["pass_at_1"],
+            "total_files": data["total_files"],
         })
 
     return results
@@ -183,7 +181,7 @@ def main(metric: str, root: Path | None):
     results = discover_results(results_root)
 
     if not results:
-        console.print("[red]No mlflow_results.json files found.[/red]")
+        console.print("[red]No evaluation summary.json files found.[/red]")
         sys.exit(1)
 
     console.print(f"Found [bold]{len(results)}[/bold] result files.\n")

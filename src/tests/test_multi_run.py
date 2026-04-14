@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from src.core.humaneval_artifacts import HumanEvalRunPaths
+
 
 # ---------------------------------------------------------------------------
 # _parse_target_path
@@ -85,23 +87,26 @@ class TestDiscoverRunN:
         from src.scripts.ci_evaluate_all import discover_experiment_dirs
         self.discover = discover_experiment_dirs
 
-    def _make_go_files(self, d: Path, n: int = 2):
-        d.mkdir(parents=True, exist_ok=True)
+    def _make_task_bundles(self, run_root: Path, n: int = 2):
+        run_paths = HumanEvalRunPaths(run_root)
+        run_paths.ensure_translation_dirs()
         for i in range(n):
-            (d / f"Go_{i}.go").write_text("package main")
+            task = run_paths.task(i)
+            task.translation_go.parent.mkdir(parents=True, exist_ok=True)
+            task.translation_go.write_text("package main\n", encoding="utf-8")
 
-    def test_baseline_flat(self, tmp_path):
-        """baseline/ with Go files directly (no run-N)."""
-        self._make_go_files(tmp_path / "minimax" / "M2.5" / "baseline")
+    def test_baseline_run_n(self, tmp_path):
+        """baseline/run-N with task bundles."""
+        self._make_task_bundles(tmp_path / "minimax" / "M2.5" / "baseline" / "run-1")
 
         results = self.discover(tmp_path)
         assert len(results) == 1
         _, _, strategy, path = results[0]
-        assert strategy == "baseline"
+        assert strategy == "baseline/run-1"
 
     def test_rag_run_n(self, tmp_path):
-        """vec-chroma-768/run-1/rag-full/ with Go files."""
-        self._make_go_files(
+        """vec-chroma-768/run-1/rag-full/ with task bundles."""
+        self._make_task_bundles(
             tmp_path / "minimax" / "M2.5" / "vec-chroma-768" / "run-1" / "rag-full"
         )
 
@@ -114,7 +119,7 @@ class TestDiscoverRunN:
         """Multiple runs for the same dimension."""
         base = tmp_path / "minimax" / "M2.5" / "vec-chroma-768"
         for run in range(1, 4):
-            self._make_go_files(base / f"run-{run}" / "rag-full")
+            self._make_task_bundles(base / f"run-{run}" / "rag-full")
 
         results = self.discover(tmp_path)
         assert len(results) == 3
@@ -126,23 +131,23 @@ class TestDiscoverRunN:
         }
 
     def test_baseline_and_run_n_rag(self, tmp_path):
-        """Flat baseline + run-N RAG structure."""
-        self._make_go_files(tmp_path / "minimax" / "M2.5" / "baseline")
-        self._make_go_files(
+        """Baseline/run-N plus run-N RAG structure."""
+        self._make_task_bundles(tmp_path / "minimax" / "M2.5" / "baseline" / "run-1")
+        self._make_task_bundles(
             tmp_path / "minimax" / "M2.5" / "vec-chroma-768" / "run-1" / "rag-full"
         )
 
         results = self.discover(tmp_path)
         assert len(results) == 2
         strategies = {r[2] for r in results}
-        assert "baseline" in strategies
+        assert "baseline/run-1" in strategies
         assert "vec-chroma-768/run-1/rag-full" in strategies
 
     def test_multiple_experiments_per_run(self, tmp_path):
         """All 4 RAG experiments under one run."""
         base = tmp_path / "minimax" / "M2.5" / "vec-chroma-768" / "run-1"
         for exp in ["rag-full", "rag-pattern-only", "rag-pattern-samples", "rag-pattern-api-docs"]:
-            self._make_go_files(base / exp)
+            self._make_task_bundles(base / exp)
 
         results = self.discover(tmp_path)
         assert len(results) == 4
@@ -160,27 +165,21 @@ class TestAnalyzeStatistics:
         self.discover = discover_results
         self.group = group_results
 
-    def _write_result(self, path: Path, experiment: str, backend: str | None, pass_at_1: float):
+    def _write_result(self, path: Path, pass_at_1: float):
         path.parent.mkdir(parents=True, exist_ok=True)
         data = {
-            "provider": "minimax",
-            "model": "M2.5",
-            "strategy": experiment,
-            "backend": backend,
-            "summary": {
-                "total_files": 164,
-                "compilation_at_1": pass_at_1 + 0.05,
-                "pass_at_1": pass_at_1,
-                "runs_rate": pass_at_1,
-                "avg_ast_similarity": 0.0,
-            },
+            "total_files": 164,
+            "compilation_at_1": pass_at_1 + 0.05,
+            "pass_at_1": pass_at_1,
+            "runs_rate": pass_at_1,
+            "avg_ast_similarity": 0.0,
         }
         path.write_text(json.dumps(data), encoding="utf-8")
 
     def test_discover_finds_results(self, tmp_path):
         self._write_result(
-            tmp_path / "minimax" / "M2.5" / "vec-chroma-768" / "run-1" / "rag-full" / "mlflow_results.json",
-            "rag-full", "vec-chroma-768", 0.42,
+            tmp_path / "minimax" / "M2.5" / "vec-chroma-768" / "run-1" / "rag-full" / "evaluation" / "results" / "summary.json",
+            0.42,
         )
 
         results = self.discover(tmp_path)
@@ -192,8 +191,8 @@ class TestAnalyzeStatistics:
 
     def test_discover_extracts_dimension(self, tmp_path):
         self._write_result(
-            tmp_path / "minimax" / "M2.5" / "vec-chroma-3072" / "run-1" / "rag-full" / "mlflow_results.json",
-            "rag-full", "vec-chroma-3072", 0.38,
+            tmp_path / "minimax" / "M2.5" / "vec-chroma-3072" / "run-1" / "rag-full" / "evaluation" / "results" / "summary.json",
+            0.38,
         )
 
         results = self.discover(tmp_path)
@@ -201,8 +200,8 @@ class TestAnalyzeStatistics:
 
     def test_discover_baseline_no_dimension(self, tmp_path):
         self._write_result(
-            tmp_path / "minimax" / "M2.5" / "baseline" / "run-1" / "mlflow_results.json",
-            "baseline", None, 0.30,
+            tmp_path / "minimax" / "M2.5" / "baseline" / "run-1" / "evaluation" / "results" / "summary.json",
+            0.30,
         )
 
         results = self.discover(tmp_path)
@@ -214,8 +213,8 @@ class TestAnalyzeStatistics:
         for dim in [768, 3072]:
             for run in range(1, 4):
                 self._write_result(
-                    tmp_path / "minimax" / "M2.5" / f"vec-chroma-{dim}" / f"run-{run}" / "rag-full" / "mlflow_results.json",
-                    "rag-full", f"vec-chroma-{dim}", 0.40 + dim / 10000,
+                    tmp_path / "minimax" / "M2.5" / f"vec-chroma-{dim}" / f"run-{run}" / "rag-full" / "evaluation" / "results" / "summary.json",
+                    0.40 + dim / 10000,
                 )
 
         results = self.discover(tmp_path)
@@ -230,8 +229,8 @@ class TestAnalyzeStatistics:
     def test_group_baseline(self, tmp_path):
         for run in range(1, 4):
             self._write_result(
-                tmp_path / "minimax" / "M2.5" / "baseline" / f"run-{run}" / "mlflow_results.json",
-                "baseline", None, 0.30,
+                tmp_path / "minimax" / "M2.5" / "baseline" / f"run-{run}" / "evaluation" / "results" / "summary.json",
+                0.30,
             )
 
         results = self.discover(tmp_path)

@@ -16,6 +16,24 @@ Usage:
 from __future__ import annotations
 
 
+_HUMANEVAL_X_INSTRUCTIONS = (
+    "HumanEval-X instructions:\n"
+    "- Implement the provided Go signature only.\n"
+    "- Return only the Go declarations needed for that implementation.\n"
+    "- Do not include `main()` or demo/example I/O.\n"
+    "- Preserve the Python program's semantics and edge cases.\n"
+    "- Include package and import statements only if they are required by the implementation."
+)
+
+_RETRIEVAL_USAGE_CONTRACT = (
+    "Retrieval usage contract:\n"
+    "- Source semantics and any provided Go signature take priority over retrieved references.\n"
+    "- Use retrieved material only when the APIs or control flow directly match the source code.\n"
+    "- Ignore any retrieved example, mapping, or documentation that would change behavior, edge cases, or the function contract.\n"
+    "- Treat parallel corpus code pairs as optional reference examples, not templates to copy."
+)
+
+
 class PromptBuilder:
     """Assembles the translation prompt from Python source and optional RAG results."""
 
@@ -39,8 +57,7 @@ class PromptBuilder:
 
         # --- Core instruction ---
         parts.append(
-            "You are a professional in Python and Go. "
-            "Translate the following Python code to idiomatic Go."
+            "Translate the Python code below to Go."
         )
 
         # --- Python source ---
@@ -51,16 +68,11 @@ class PromptBuilder:
             parts.append(
                 f"Use this Go function signature:\n```go\n{go_signature}\n```"
             )
-            parts.append(
-                "HumanEval-X instructions:\n"
-                "- Implement the provided Go signature only.\n"
-                "- Return only the Go code needed for the function implementation.\n"
-                "- Do not include `main()` or demo/example I/O.\n"
-                "- Include package and import statements only if they are required by the implementation."
-            )
+            parts.append(_HUMANEVAL_X_INSTRUCTIONS)
 
         # --- RAG sections (only if rag_result is provided and has content) ---
         if rag_result is not None:
+            parts.append(_RETRIEVAL_USAGE_CONTRACT)
             parts.extend(self._rag_sections(rag_result))
 
         return "\n\n".join(parts)
@@ -117,8 +129,8 @@ class PromptBuilder:
                     f"Go:\n```go\n{p['go_code']}\n```"
                 )
             sections.append(
-                "Here are Python-Go code pairs to help you understand "
-                "how Python code is typically written in Go:\n\n"
+                "Here are optional Python-Go reference examples to help you understand "
+                "how similar Python code is often expressed in Go. Treat them as references, not templates:\n\n"
                 + "\n\n".join(blocks)
             )
 

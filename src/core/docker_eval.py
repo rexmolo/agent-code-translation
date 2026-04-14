@@ -48,6 +48,25 @@ gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
 gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
 """
 
+_DEFAULT_TEST_IMPORTS = (
+    "testing",
+    "github.com/stretchr/testify/assert",
+)
+
+# HumanEval-X test bodies reference stdlib packages via qualified identifiers
+# like `math.Abs(...)` or `rand.New(...)`. Keep the package-prefix mapping in
+# one place so import inference remains deterministic and easy to extend.
+_TEST_IDENTIFIER_IMPORTS = {
+    "fmt": "fmt",
+    "math": "math",
+    "rand": "math/rand",
+    "reflect": "reflect",
+    "sort": "sort",
+    "strconv": "strconv",
+    "strings": "strings",
+    "time": "time",
+}
+
 
 @dataclass
 class DockerResult:
@@ -122,6 +141,14 @@ def strip_markdown_fences(code: str) -> str:
     return code
 
 
+def ensure_package_declaration(code: str) -> str:
+    """Ensure Go code starts with a package declaration."""
+    normalized = code.strip()
+    if not re.search(r"^\s*package\s+\w+", normalized, re.MULTILINE):
+        normalized = f"package main\n\n{normalized}" if normalized else "package main\n"
+    return normalized if normalized.endswith("\n") else normalized + "\n"
+
+
 def _extract_declarations(code: str) -> tuple[str, bool]:
     """Extract everything from generated code except package, imports, and func main.
 
@@ -192,37 +219,27 @@ def _extract_declarations(code: str) -> tuple[str, bool]:
 
 
 def build_solution_file(generated_code: str) -> str:
-    """Build a solution.go file from LLM-generated code.
-
-    The generated code may include package/imports/func main, or may be
-    a bare function body (like HumanEval-X ground truth format).
-    We extract just the declarations and wrap them in a proper Go file.
-    """
+    """Build a solution.go file from LLM-generated code with minimal normalization."""
     generated_code = strip_markdown_fences(generated_code)
+    return ensure_package_declaration(generated_code)
 
-    # Collect imports from generated code
-    imports = _extract_imports(generated_code)
 
-    # Extract function/type/var/const declarations
-    declarations, had_main = _extract_declarations(generated_code)
+def prepare_evaluation_sources(generated_code: str, test_code: str) -> tuple[str, str]:
+    """Return the exact solution and wrapped test sources used for evaluation."""
+    solution_source = build_solution_file(generated_code)
+    test_source = build_test_file(test_code)
+    return solution_source, test_source
 
-    # Filter imports to only those actually used in the declarations.
-    # Only applies when func main() was stripped — otherwise keep all imports
-    # (bare functions without main don't have this orphan problem).
-    if had_main:
-        imports = [imp for imp in imports if imp.split("/")[-1] + "." in declarations]
 
-    lines = ["package main", ""]
-    if imports:
-        lines.append("import (")
-        for imp in sorted(imports):
-            lines.append(f'\t"{imp}"')
-        lines.append(")")
-        lines.append("")
-    lines.append(declarations)
-    lines.append("")
-
-    return "\n".join(lines)
+def infer_test_imports(test_code: str) -> list[str]:
+    """Infer Go imports from qualified identifiers used in a HumanEval-X test."""
+    imports = set(_DEFAULT_TEST_IMPORTS)
+    prefixes = set(re.findall(r"\b([A-Za-z_]\w*)\s*\.", test_code))
+    for prefix in prefixes:
+        import_path = _TEST_IDENTIFIER_IMPORTS.get(prefix)
+        if import_path:
+            imports.add(import_path)
+    return sorted(imports)
 
 
 def build_test_file(test_code: str) -> str:
@@ -231,29 +248,7 @@ def build_test_file(test_code: str) -> str:
     The test field from HumanEval-X is just the test function body
     (no package, no imports). We wrap it with proper package/import header.
     """
-    # Standard imports needed by HumanEval-X tests
-    imports = [
-        "testing",
-        "github.com/stretchr/testify/assert",
-    ]
-
-    # Detect additional imports needed
-    if "rand." in test_code or "rand.New" in test_code:
-        imports.append("math/rand")
-    if "time." in test_code:
-        imports.append("time")
-    if "math." in test_code:
-        imports.append("math")
-    if "fmt." in test_code:
-        imports.append("fmt")
-    if "sort." in test_code:
-        imports.append("sort")
-    if "strings." in test_code:
-        imports.append("strings")
-    if "strconv." in test_code:
-        imports.append("strconv")
-    if "reflect." in test_code:
-        imports.append("reflect")
+    imports = infer_test_imports(test_code)
 
     lines = ["package main", ""]
     lines.append("import (")
@@ -424,8 +419,7 @@ def evaluate_single_task(
         dataset="humaneval-x",
     )
 
-    solution_source = build_solution_file(generated_code)
-    test_source = build_test_file(test_code)
+    solution_source, test_source = prepare_evaluation_sources(generated_code, test_code)
 
     docker_result = run_in_docker(
         solution_source, test_source, task_num,

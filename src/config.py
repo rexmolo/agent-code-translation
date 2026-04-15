@@ -22,7 +22,7 @@ DATA_DIR = REPO_ROOT / "data"
 TRANSLATION_SOURCE_DIR = DATA_DIR / "translation" / "source"
 TRANSLATION_TARGET_DIR = DATA_DIR / "translation" / "target"
 LOCAL_TARGET_DIR = TRANSLATION_TARGET_DIR / "local"
-HUMANEVAL_X_DIR = DATA_DIR / "translation" / "humaneval-x"
+HUMANEVAL_X_DIR = DATA_DIR / "translation" / "target" / "humaneval-x"
 RAG_PROCESSED_DIR = DATA_DIR / "RAG" / "processed"
 ERROR_DB_PATH = DATA_DIR / "errors.db"
 

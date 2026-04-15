@@ -41,6 +41,12 @@ def _register_defaults() -> None:
             return GPT(id=model_id)
         return factory
 
+    def _lmstudio_factory(model_id: str) -> Callable:
+        def factory():
+            from src.providers.lmstudio import LMStudio
+            return LMStudio(id=model_id)
+        return factory
+
     def _gemini_factory(model_id: str, location: str | None = None) -> Callable:
         def factory():
             from agno.models.google import Gemini
@@ -102,6 +108,19 @@ def _register_defaults() -> None:
                 "model_id": "gpt-5.4",
                 "label": "GPT-5.4",
                 "factory": _openai_factory("gpt-5.4"),
+            },
+        },
+    }
+
+    _REGISTRY["lmstudio"] = {
+        "provider_cfg": pcfg.get("lmstudio", {}),
+        "env_var": pcfg.get("lmstudio", {}).get("api_key_env", ""),
+        "label": "LM Studio (local)",
+        "variants": {
+            "qwen3_coder_next": {
+                "model_id": "qwen/qwen3-coder-next",
+                "label": "Qwen3 Coder Next (local)",
+                "factory": _lmstudio_factory("qwen/qwen3-coder-next"),
             },
         },
     }

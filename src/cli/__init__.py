@@ -226,6 +226,7 @@ def _interactive():
                 Choice(title="rag-pattern-samples", value="rag-pattern-samples"),
                 Choice(title="rag-pattern-api-docs", value="rag-pattern-api-docs"),
                 Choice(title="rag-full", value="rag-full"),
+                Choice(title="rag-routed", value="rag-routed"),
                 Choice(title="Custom...", value="_custom"),
             ]
             selected_experiment = _ask_or_abort(questionary.select(

@@ -20,4 +20,8 @@
 - tree-sitter for code parsing.
 
 ## rules
-- don't read the files inside .doc folder except memory.
+- The tasks will be assigned in this location .doc/Tasks/01 - tasks, activate means that task is processing and it will be moved into test after finished. then will be moved into complete after finishing test.
+
+
+## Thinking
+- Think if it will affect the final result whenever you are going to change files and make decitions, because we are evaluating the model output

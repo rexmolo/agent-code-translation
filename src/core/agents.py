@@ -36,6 +36,17 @@ def _extract_go_code(text: str) -> str:
     return text.strip()
 
 
+def _supports_structured_outputs(model) -> bool:
+    """Return whether the model can reliably honor Agno structured outputs."""
+    checker = getattr(model, "_supports_structured_outputs", None)
+    if callable(checker):
+        try:
+            return bool(checker())
+        except Exception:
+            return True
+    return True
+
+
 class _PlainTextTranslationAgent:
     """Wraps an Agno Agent whose model cannot reliably emit structured output.
 
@@ -50,7 +61,9 @@ class _PlainTextTranslationAgent:
     def run(self, *args, **kwargs):
         response = self._inner.run(*args, **kwargs)
         content = getattr(response, "content", None)
-        if isinstance(content, str):
+        status = str(getattr(response, "status", "") or "").upper()
+        is_error = "ERROR" in status or "FAIL" in status
+        if isinstance(content, str) and not is_error:
             response.content = TranslationResult(
                 go_code=_extract_go_code(content),
                 explanation="",
@@ -72,7 +85,7 @@ def create_translation_agent(model, kb_toggles: dict | None = None):
                      is assembled in PromptBuilder.
     """
 
-    if getattr(model, "provider", None) == "LMStudio":
+    if getattr(model, "provider", None) == "LMStudio" or not _supports_structured_outputs(model):
         inner = Agent(
             name="Translator",
             role="Translate Python source code to Go",

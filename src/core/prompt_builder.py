@@ -15,6 +15,8 @@ Usage:
 
 from __future__ import annotations
 
+from src.rag.schema import rag_result_has_usable_items
+
 
 _HUMANEVAL_X_INSTRUCTIONS = (
     "HumanEval-X instructions:\n"
@@ -34,8 +36,33 @@ _RETRIEVAL_USAGE_CONTRACT = (
 )
 
 
+def _load_prompt_config() -> dict:
+    from src.rag.embeddings import load_rag_config
+
+    return load_rag_config().get("retrieval", {})
+
+
+def _compact_code_snippet(text: str, *, limit: int = 96) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 3].rstrip() + "..."
+
+
 class PromptBuilder:
     """Assembles the translation prompt from Python source and optional RAG results."""
+
+    def __init__(
+        self,
+        *,
+        prompt_format: str | None = None,
+        retrieval_contract: bool | None = None,
+    ) -> None:
+        retrieval_cfg = _load_prompt_config()
+        self._prompt_format = prompt_format or retrieval_cfg.get("prompt_format", "verbose")
+        if retrieval_contract is None:
+            retrieval_contract = retrieval_cfg.get("retrieval_contract", True)
+        self._retrieval_contract = bool(retrieval_contract)
 
     def build(
         self,
@@ -71,9 +98,13 @@ class PromptBuilder:
             parts.append(_HUMANEVAL_X_INSTRUCTIONS)
 
         # --- RAG sections (only if rag_result is provided and has content) ---
-        if rag_result is not None:
-            parts.append(_RETRIEVAL_USAGE_CONTRACT)
-            parts.extend(self._rag_sections(rag_result))
+        if rag_result_has_usable_items(rag_result):
+            self._stamp_prompt_metadata(rag_result, includes_retrieval=True)
+            if self._retrieval_contract:
+                parts.append(_RETRIEVAL_USAGE_CONTRACT)
+            parts.extend(self._rag_sections(rag_result, prompt_format=self._prompt_format))
+        elif rag_result is not None:
+            self._stamp_prompt_metadata(rag_result, includes_retrieval=False)
 
         return "\n\n".join(parts)
 
@@ -92,7 +123,19 @@ class PromptBuilder:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _rag_sections(self, rag_result) -> list[str]:
+    def _stamp_prompt_metadata(self, rag_result, *, includes_retrieval: bool) -> None:
+        prompt_metadata = getattr(rag_result, "prompt_metadata", None)
+        if isinstance(prompt_metadata, dict):
+            prompt_metadata["format"] = self._prompt_format
+            prompt_metadata["retrieval_contract"] = "on" if self._retrieval_contract else "off"
+            prompt_metadata["includes_retrieval"] = includes_retrieval
+
+    def _rag_sections(self, rag_result, *, prompt_format: str) -> list[str]:
+        if prompt_format == "compact":
+            return self._compact_rag_sections(rag_result)
+        return self._verbose_rag_sections(rag_result)
+
+    def _verbose_rag_sections(self, rag_result) -> list[str]:
         sections: list[str] = []
 
         # Grammar patterns
@@ -145,6 +188,77 @@ class PromptBuilder:
             sections.append(
                 "Here is Go documentation for the relevant APIs:\n\n"
                 + "\n\n".join(lines)
+            )
+
+        if getattr(rag_result, "api_sequences", None):
+            lines = [
+                f"- `{record['sequence_text']}`"
+                for record in rag_result.api_sequences
+            ]
+            sections.append(
+                "Here are relevant Go API usage sequences:\n\n"
+                + "\n".join(lines)
+            )
+
+        return sections
+
+    def _compact_rag_sections(self, rag_result) -> list[str]:
+        sections: list[str] = []
+
+        if rag_result.grammar_mappings:
+            lines = []
+            for mapping in rag_result.grammar_mappings:
+                go_idiom = " ".join(mapping["go_pattern"].split())
+                lines.append(
+                    f"- {mapping['description']}\n"
+                    f"  Go idiom: `{go_idiom}`"
+                )
+            sections.append(
+                "Relevant Go grammar evidence:\n\n" + "\n".join(lines)
+            )
+
+        if rag_result.api_mappings:
+            lines = [
+                f"- `{mapping['python_api']}` -> `{mapping['go_api']}`: {mapping['description']}"
+                for mapping in rag_result.api_mappings
+            ]
+            sections.append(
+                "Relevant API evidence:\n\n" + "\n".join(lines)
+            )
+
+        if rag_result.parallel_corpus:
+            lines = []
+            for pair in rag_result.parallel_corpus:
+                python_code = _compact_code_snippet(pair["python_code"])
+                go_code = _compact_code_snippet(pair["go_code"])
+                lines.append(
+                    f"- Python `{python_code}` -> Go `{go_code}`"
+                )
+            sections.append(
+                "Optional reference pairs:\n\n" + "\n".join(lines)
+            )
+
+        if rag_result.documentation:
+            lines = []
+            for doc in rag_result.documentation:
+                usage_note = doc["description"]
+                if doc.get("example"):
+                    example = " ".join(doc["example"].split())
+                    usage_note = f"{usage_note} Usage: `{example}`"
+                lines.append(
+                    f"- API `{doc['api']}`: {usage_note}"
+                )
+            sections.append(
+                "Relevant Go documentation:\n\n" + "\n".join(lines)
+            )
+
+        if getattr(rag_result, "api_sequences", None):
+            lines = [
+                f"- Sequence `{record['sequence_text']}`"
+                for record in rag_result.api_sequences
+            ]
+            sections.append(
+                "Relevant Go API usage sequences:\n\n" + "\n".join(lines)
             )
 
         return sections

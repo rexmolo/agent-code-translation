@@ -46,3 +46,10 @@ class EvaluationRecord(BaseModel):
     tests_total: int = 0
     tests_passed: int = 0
     notes: str = ""
+    repair_attempted: bool = False
+    repair_succeeded: bool = False
+    first_pass_compiles: bool | None = None
+    first_pass_runs_successfully: bool | None = None
+    first_pass_pass_at_1: bool | None = None
+    first_pass_notes: str = ""
+    repair_notes: str = ""

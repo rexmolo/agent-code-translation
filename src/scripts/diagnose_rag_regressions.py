@@ -29,6 +29,8 @@ from typing import Any
 from rich.console import Console
 from rich.table import Table
 
+from src.rag.schema import RAG_SOURCES
+
 console = Console()
 
 
@@ -104,27 +106,36 @@ def load_task_bundles(run_root: Path) -> dict[str, TaskBundle]:
     return bundles
 
 
-def _parallel_corpus_hits(retrieval_path: Path) -> int:
+def _source_counts(retrieval_path: Path) -> dict[str, int]:
     if not retrieval_path.is_file():
-        return 0
+        return {}
 
     payload = _read_json(retrieval_path)
     if isinstance(payload.get("retrieval_counts"), dict):
-        count = payload["retrieval_counts"].get("parallel_corpus")
-        if isinstance(count, int):
-            return count
+        counts = {
+            key: value
+            for key, value in payload["retrieval_counts"].items()
+            if isinstance(value, int)
+        }
+        if counts:
+            return counts
 
     items = payload.get("items")
     if isinstance(items, dict):
-        corpus = items.get("parallel_corpus")
-        if isinstance(corpus, list):
-            return len(corpus)
+        counts = {
+            key: len(value)
+            for key, value in items.items()
+            if isinstance(value, list)
+        }
+        if counts:
+            return counts
 
-    legacy = payload.get("parallel_corpus")
-    if isinstance(legacy, list):
-        return len(legacy)
-
-    return 0
+    legacy_counts = {}
+    for key in RAG_SOURCES:
+        value = payload.get(key)
+        if isinstance(value, list):
+            legacy_counts[key] = len(value)
+    return legacy_counts
 
 
 def analyze_regressions(
@@ -152,7 +163,7 @@ def analyze_regressions(
                 regressions.append(
                     {
                         "task_id": task_id,
-                        "parallel_corpus_hits": _parallel_corpus_hits(rag_task.retrieval_path),
+                        "source_counts": _source_counts(rag_task.retrieval_path),
                         "artifacts": {
                             "prompt": str(rag_task.prompt_path),
                             "retrieval": str(rag_task.retrieval_path),
@@ -193,6 +204,15 @@ def _copy_if_exists(source: Path, destination: Path) -> bool:
     return True
 
 
+def _format_source_counts(source_counts: dict[str, int]) -> str:
+    if not source_counts:
+        return "none"
+    return ", ".join(
+        f"{key}={value}"
+        for key, value in sorted(source_counts.items())
+    )
+
+
 def write_reports(summary: dict[str, Any], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -216,7 +236,7 @@ def write_reports(summary: dict[str, Any], output_dir: Path) -> None:
         for case in run["regressions"]:
             task_id = case["task_id"]
             lines.append(
-                f"- `{task_id}`: parallel corpus hits = {case['parallel_corpus_hits']}"
+                f"- `{task_id}`: source counts = {_format_source_counts(case['source_counts'])}"
             )
 
             case_dir = run_dir / task_id
@@ -237,7 +257,7 @@ def write_reports(summary: dict[str, Any], output_dir: Path) -> None:
                 json.dumps(
                     {
                         "task_id": task_id,
-                        "parallel_corpus_hits": case["parallel_corpus_hits"],
+                        "source_counts": case["source_counts"],
                         "copied_artifacts": copied,
                     },
                     indent=2,

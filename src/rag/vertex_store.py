@@ -208,8 +208,8 @@ def query_neighbors(
     embedding: list[float],
     n_results: int = 5,
     collection_name: str | None = None,
-) -> list[str]:
-    """Query nearest neighbors, returning a list of datapoint IDs.
+) -> list[dict]:
+    """Query nearest neighbors, returning datapoint IDs with optional distances.
 
     If *collection_name* is given, filters results to that collection.
     """
@@ -230,4 +230,10 @@ def query_neighbors(
 
     if not response or not response[0]:
         return []
-    return [neighbor.id for neighbor in response[0]]
+    return [
+        {
+            "id": neighbor.id,
+            "distance": getattr(neighbor, "distance", None),
+        }
+        for neighbor in response[0]
+    ]

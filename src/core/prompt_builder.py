@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 from src.rag.schema import rag_result_has_usable_items
+from src.rag.rendering import sanitize_parallel_go_reference
 
 
 _HUMANEVAL_X_INSTRUCTIONS = (
@@ -167,9 +168,10 @@ class PromptBuilder:
         if rag_result.parallel_corpus:
             blocks = []
             for p in rag_result.parallel_corpus:
+                go_code = sanitize_parallel_go_reference(p["go_code"])
                 blocks.append(
                     f"Python:\n```python\n{p['python_code']}\n```\n"
-                    f"Go:\n```go\n{p['go_code']}\n```"
+                    f"Go:\n```go\n{go_code}\n```"
                 )
             sections.append(
                 "Here are optional Python-Go reference examples to help you understand "
@@ -230,7 +232,7 @@ class PromptBuilder:
             lines = []
             for pair in rag_result.parallel_corpus:
                 python_code = _compact_code_snippet(pair["python_code"])
-                go_code = _compact_code_snippet(pair["go_code"])
+                go_code = _compact_code_snippet(sanitize_parallel_go_reference(pair["go_code"]))
                 lines.append(
                     f"- Python `{python_code}` -> Go `{go_code}`"
                 )

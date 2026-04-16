@@ -29,6 +29,7 @@ from src.config import (
     PARALLEL_CORPUS_FILE,
 )
 from src.rag.embeddings import get_embedding_function, load_rag_config
+from src.rag.rendering import sanitize_parallel_go_reference
 from src.rag.schema import RAG_SOURCES, rag_result_has_usable_items
 from src.rag.store import collection_name_with_dim
 
@@ -1087,9 +1088,10 @@ def build_translation_context(
         if accepted_matches:
             pairs = []
             for m in accepted_matches:
+                go_code = sanitize_parallel_go_reference(m["go_code"])
                 pairs.append(
                     f"**Python:**\n```python\n{m['python_code']}\n```\n"
-                    f"**Go:**\n```go\n{m['go_code']}\n```"
+                    f"**Go:**\n```go\n{go_code}\n```"
                 )
             sections.append("## Python-Go Code Pairs\n\n" + "\n\n".join(pairs))
 

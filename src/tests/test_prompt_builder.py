@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from src.core.prompt_builder import PromptBuilder
+from src.rag.rendering import sanitize_parallel_go_reference
 
 
 class TestPromptBuilder:
@@ -87,7 +88,7 @@ class TestPromptBuilder:
             parallel_corpus=[
                 {
                     "python_code": "items = sorted(values)",
-                    "go_code": "slices.Sort(values)",
+                    "go_code": 'package main\n\nimport "fmt"\n\nfunc main() {\n    fmt.Println("demo")\n}\n\nfunc sortValues(values []int) {\n    slices.Sort(values)\n}\n',
                 }
             ],
             documentation=[],
@@ -103,6 +104,10 @@ class TestPromptBuilder:
 
         assert "Here are optional Python-Go reference examples" in prompt
         assert "Treat them as references, not templates:" in prompt
+        assert "package main" not in prompt
+        assert 'import "fmt"' not in prompt
+        assert "func main()" not in prompt
+        assert "func sortValues(values []int)" in prompt
 
     def test_empty_rag_result_uses_baseline_prompt_path(self):
         rag_result = SimpleNamespace(
@@ -209,6 +214,28 @@ class TestPromptBuilder:
 
         assert "Optional reference pairs:" in prompt
         assert "..." in prompt
+
+    def test_sanitize_parallel_go_reference_strips_program_scaffolding(self):
+        go_code = (
+            "package main\n\n"
+            "import (\n"
+            '    "fmt"\n'
+            '    "strings"\n'
+            ")\n\n"
+            "func helper() string {\n"
+            '    return strings.TrimSpace(" x ")\n'
+            "}\n\n"
+            "func main() {\n"
+            '    fmt.Println(helper())\n'
+            "}\n"
+        )
+
+        sanitized = sanitize_parallel_go_reference(go_code)
+
+        assert "package main" not in sanitized
+        assert "import (" not in sanitized
+        assert "func main()" not in sanitized
+        assert "func helper() string" in sanitized
 
     def test_prompt_builder_noops_metadata_stamp_when_attr_missing(self):
         rag_result = SimpleNamespace(

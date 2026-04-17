@@ -33,7 +33,6 @@ from src.core.humaneval_artifacts import (
     humaneval_run_root,
     is_baseline_experiment,
     parse_humaneval_run_root,
-    repair_enabled_for_experiment,
     write_json,
     write_text,
 )
@@ -189,7 +188,7 @@ def _maybe_write_rag_diagnostics(
         HUMANEVAL_X_DIR,
         provider,
         variant,
-        "baseline-repair" if repair_enabled_for_experiment(experiment) else "baseline",
+        "baseline",
         None,
         run_id,
     )
@@ -230,12 +229,9 @@ def _setup_and_display_kb(
 
     configure_kb_for_experiment(experiment)
     toggles = get_active_kb_toggles(experiment)
-    repair_enabled = repair_enabled_for_experiment(experiment)
 
     if toggles is None:
         console.print("   RAG: [dim]disabled (baseline)[/dim]")
-        if repair_enabled:
-            console.print("   Repair: [yellow]one-round compile repair enabled[/yellow]")
         return
 
     labels = {
@@ -253,113 +249,6 @@ def _setup_and_display_kb(
     console.print(f"   RAG: {' | '.join(parts)}")
     backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
     console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
-    if repair_enabled:
-        console.print("   Repair: [yellow]one-round compile repair enabled[/yellow]")
-
-
-def _build_compile_repair_prompt(
-    *,
-    python_code: str,
-    go_signature: str,
-    previous_go_code: str,
-    compiler_error: str,
-) -> str:
-    return (
-        "The previous Go translation failed to compile. Correct it.\n\n"
-        "Python code:\n"
-        f"```python\n{python_code}\n```\n\n"
-        "Required Go function signature:\n"
-        f"```go\n{go_signature}\n```\n\n"
-        "Previous Go translation:\n"
-        f"```go\n{previous_go_code}\n```\n\n"
-        "Compiler error:\n"
-        f"```\n{compiler_error}\n```\n\n"
-        "Return only the corrected Go declarations needed for the same task.\n"
-        "Do not include prose."
-    )
-
-
-def _load_model(provider_key: str, variant_key: str):
-    from src.providers.registry import enable_model
-
-    enable_model(provider_key, variant_key)
-    for enabled_provider, enabled_variant, model in get_enabled_models():
-        if enabled_provider == provider_key and enabled_variant == variant_key:
-            return model
-    raise RuntimeError(f"Could not instantiate model for {provider_key}/{variant_key}")
-
-
-def _attempt_compile_repair(
-    *,
-    provider: str,
-    variant: str,
-    pair: dict,
-    generated_code: str,
-    compiler_error: str,
-    task_paths,
-) -> tuple[str | None, str]:
-    model = _load_model(provider, variant)
-    translator = _agents.create_translation_agent(model)
-    prompt = _build_compile_repair_prompt(
-        python_code=pair["py_solution"],
-        go_signature=pair["declaration"],
-        previous_go_code=generated_code,
-        compiler_error=compiler_error,
-    )
-    write_json(
-        task_paths.repair_prompt_json,
-        _prompt_payload(
-            translator,
-            prompt,
-            provider,
-            variant,
-            pair["task_id"],
-            "compile-repair",
-            "none",
-            {},
-        ),
-    )
-    try:
-        response = translator.run(prompt, stream=False)
-        write_json(task_paths.repair_raw_json, _serialize_raw_response(response))
-        result = getattr(response, "content", None)
-        if isinstance(result, TranslationResult):
-            return result.go_code, ""
-        return None, "Repair request returned no structured output"
-    except Exception as exc:
-        write_json(
-            task_paths.repair_raw_json,
-            {
-                "available": False,
-                "format": "error",
-                "payload": None,
-                "note": f"Repair request failed before a raw response could be captured: {exc}",
-            },
-        )
-        return None, str(exc)
-
-
-def _finalize_repair_record(
-    first_pass_record: EvaluationRecord,
-    repaired_record: EvaluationRecord | None = None,
-    repair_note: str = "",
-) -> EvaluationRecord:
-    record = (
-        repaired_record.model_copy(deep=True)
-        if repaired_record is not None
-        else first_pass_record.model_copy(deep=True)
-    )
-    record.repair_attempted = True
-    record.repair_succeeded = bool(repaired_record is not None and repaired_record.compiles)
-    record.first_pass_compiles = first_pass_record.compiles
-    record.first_pass_runs_successfully = first_pass_record.runs_successfully
-    record.first_pass_pass_at_1 = first_pass_record.pass_at_1
-    record.first_pass_notes = first_pass_record.notes
-    if repair_note:
-        record.repair_notes = repair_note
-    elif repaired_record is not None and repaired_record.compiles and not first_pass_record.compiles:
-        record.repair_notes = "Compilation repaired after one corrective round"
-    return record
 
 
 def _parse_target_path(target_dir: Path) -> tuple[str, str, str, str | None, int | None]:
@@ -909,8 +798,6 @@ def _evaluate_humaneval_x(
         batch_size = eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
     provider, variant, experiment, backend, run_id = _parse_target_path(eval_target_dir)
-    repair_cfg = eval_config.get("repair", {})
-    repair_enabled = repair_enabled_for_experiment(experiment) and repair_cfg.get("enabled", False)
     run_paths = HumanEvalRunPaths(eval_target_dir)
     run_paths.ensure_evaluation_dirs()
 
@@ -973,43 +860,12 @@ def _evaluate_humaneval_x(
         write_text(task_paths.evaluation_solution_go, solution_source)
         write_text(task_paths.evaluation_test_go, test_source)
         log_eval_start(task_paths.task_name)
-        first_pass_record = evaluate_single_task(
+        record = evaluate_single_task(
             task_id=pair["task_id"],
             generated_code=generated_code,
             test_code=test_code,
             timeout=timeout,
         )
-        write_json(task_paths.evaluation_first_pass_result_json, first_pass_record.model_dump())
-
-        record = first_pass_record
-        if repair_enabled and not first_pass_record.compiles:
-            repaired_code, repair_note = _attempt_compile_repair(
-                provider=provider,
-                variant=variant,
-                pair=pair,
-                generated_code=generated_code,
-                compiler_error=first_pass_record.notes,
-                task_paths=task_paths,
-            )
-            if repaired_code:
-                write_text(task_paths.repaired_translation_go, repaired_code)
-                repaired_solution_source, _ = prepare_evaluation_sources(repaired_code, test_code)
-                write_text(task_paths.evaluation_repaired_solution_go, repaired_solution_source)
-                repaired_record = evaluate_single_task(
-                    task_id=pair["task_id"],
-                    generated_code=repaired_code,
-                    test_code=test_code,
-                    timeout=timeout,
-                )
-                record = _finalize_repair_record(first_pass_record, repaired_record, repair_note)
-                write_json(task_paths.evaluation_repaired_result_json, record.model_dump())
-            else:
-                record = _finalize_repair_record(
-                    first_pass_record,
-                    None,
-                    repair_note or "Repair attempt failed",
-                )
-
         write_json(task_paths.evaluation_result_json, record.model_dump())
         _handle_eval_record(record, task_paths.task_name, provider, variant, experiment, model_id_str)
         return task_paths, pair, record

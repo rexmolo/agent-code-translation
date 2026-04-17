@@ -21,7 +21,3 @@ docker:
   image: "golang:1.26-alpine"
   memory_limit: "512m"
   timeout: 60
-
-repair:
-  enabled: true
-  rounds: 1

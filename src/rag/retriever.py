@@ -886,11 +886,14 @@ def build_retrieval_artifact(
         source_traces[source_name] = _normalize_source_trace(source_name, trace)
 
     prompt_metadata = deepcopy(getattr(rag_result, "prompt_metadata", {}))
-    prompt_metadata.setdefault("format", config.get("prompt_format", "verbose"))
-    prompt_metadata.setdefault(
-        "retrieval_contract",
-        "on" if config.get("retrieval_contract", True) else "off",
-    )
+    if "prompt_format" in config:
+        prompt_metadata["format"] = config["prompt_format"]
+    else:
+        prompt_metadata.setdefault("format", "verbose")
+    if "retrieval_contract" in config:
+        prompt_metadata["retrieval_contract"] = "on" if config["retrieval_contract"] else "off"
+    else:
+        prompt_metadata.setdefault("retrieval_contract", "on")
     prompt_metadata.setdefault("includes_retrieval", rag_result_has_usable_items(rag_result))
 
     router_metadata = deepcopy(getattr(rag_result, "router_metadata", {}))

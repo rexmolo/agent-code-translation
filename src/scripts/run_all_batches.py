@@ -41,6 +41,7 @@ RAG_EXPERIMENTS = [
     "rag-pattern-samples",
     "rag-pattern-api-docs",
     "rag-full",
+    "rag-routed",
 ]
 
 _log_file = None
@@ -133,6 +134,8 @@ def run_translate(
     dimension: int | None,
     delay: float,
     sample: int | None = None,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> bool:
     """Run a single translation experiment via CLI subprocess.
 
@@ -152,6 +155,10 @@ def run_translate(
         cmd.extend(["--dimension", str(dimension)])
     if sample is not None:
         cmd.extend(["-n", str(sample)])
+    if prompt_format is not None:
+        cmd.extend(["--prompt-format", prompt_format])
+    if retrieval_contract is not None:
+        cmd.append("--retrieval-contract" if retrieval_contract else "--no-retrieval-contract")
 
     n_files = sample or FILES_PER_EXPERIMENT
     log(f"  Translating: {experiment} dim={dimension} run-{run_id} ({n_files} files, {delay}s delay)")
@@ -187,6 +194,8 @@ def verify_and_retry(
     target_dir: Path,
     expected: int,
     max_retries: int = 3,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> bool:
     """Check that all expected Go files exist; retry missing ones.
 
@@ -221,6 +230,10 @@ def verify_and_retry(
         ]
         if dimension is not None:
             cmd.extend(["--dimension", str(dimension)])
+        if prompt_format is not None:
+            cmd.extend(["--prompt-format", prompt_format])
+        if retrieval_contract is not None:
+            cmd.append("--retrieval-contract" if retrieval_contract else "--no-retrieval-contract")
 
         try:
             subprocess.run(
@@ -370,6 +383,14 @@ def print_schedule(
 @click.option("--no-baseline", is_flag=True, default=False, help="Skip baseline runs.")
 @click.option("--no-evaluate", is_flag=True, default=False, help="Skip evaluation phase.")
 @click.option("--sample", type=int, default=None, help="Translate only N files per experiment (for smoke testing).")
+@click.option(
+    "--prompt-format", type=click.Choice(["verbose", "compact"]), default=None,
+    help="Override retrieval prompt packaging format for all runs in this batch.",
+)
+@click.option(
+    "--retrieval-contract/--no-retrieval-contract", default=None,
+    help="Override whether the retrieval usage contract is included for all runs in this batch.",
+)
 def main(
     provider: str,
     variant: str,
@@ -384,6 +405,8 @@ def main(
     no_baseline: bool,
     no_evaluate: bool,
     sample: int | None,
+    prompt_format: str | None,
+    retrieval_contract: bool | None,
 ):
     """Run all experiments in automated batches with rate limit management."""
     _init_log_file()
@@ -435,6 +458,8 @@ def main(
                 dimension=item["dimension"],
                 delay=delay,
                 sample=sample,
+                prompt_format=prompt_format,
+                retrieval_contract=retrieval_contract,
             )
 
             if success:
@@ -456,6 +481,8 @@ def main(
                     dimension=item["dimension"],
                     target_dir=target_dir,
                     expected=n_expected,
+                    prompt_format=prompt_format,
+                    retrieval_contract=retrieval_contract,
                 )
                 translated_dirs.append((item, target_dir))
 

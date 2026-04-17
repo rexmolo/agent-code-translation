@@ -259,8 +259,8 @@ class TestBatchRunner:
 
     def test_queue_size_without_baseline(self):
         queue = self.build_queue([768, 3072], runs=3, include_baseline=False)
-        # 2 dims × 3 runs × 4 experiments = 24
-        assert len(queue) == 24
+        # 2 dims × 3 runs × 5 experiments = 30
+        assert len(queue) == 30
 
     def test_queue_order_rag_experiments(self):
         queue = self.build_queue([768], runs=2, include_baseline=False)
@@ -271,8 +271,19 @@ class TestBatchRunner:
 
     def test_queue_full_60_experiments(self):
         queue = self.build_queue([768, 1536, 3072], runs=5, include_baseline=False)
-        # 3 dims × 5 runs × 4 experiments = 60
-        assert len(queue) == 60
+        # 3 dims × 5 runs × 5 experiments = 75
+        assert len(queue) == 75
+
+    def test_queue_includes_rag_routed(self):
+        queue = self.build_queue([768], runs=1, include_baseline=False)
+        experiments = [item["experiment"] for item in queue]
+        assert experiments == [
+            "rag-pattern-only",
+            "rag-pattern-samples",
+            "rag-pattern-api-docs",
+            "rag-full",
+            "rag-routed",
+        ]
 
     def test_experiment_key_unique(self):
         queue = self.build_queue([768, 3072], runs=2, include_baseline=True)

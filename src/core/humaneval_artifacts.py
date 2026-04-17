@@ -8,24 +8,14 @@ from pathlib import Path
 from typing import Iterable
 
 
-REPAIR_EXPERIMENT_SUFFIX = "-repair"
-
-
 def base_experiment_name(experiment: str) -> str:
-    """Strip the repair suffix to recover the underlying experiment preset."""
-    if experiment.endswith(REPAIR_EXPERIMENT_SUFFIX):
-        return experiment[: -len(REPAIR_EXPERIMENT_SUFFIX)]
+    """Return the canonical experiment preset name."""
     return experiment
 
 
-def repair_enabled_for_experiment(experiment: str) -> bool:
-    """Return True when the experiment name opts into Stage 6 repair."""
-    return experiment.endswith(REPAIR_EXPERIMENT_SUFFIX)
-
-
 def is_baseline_experiment(experiment: str) -> bool:
-    """Return True for baseline and baseline-repair style experiments."""
-    return base_experiment_name(experiment) == "baseline"
+    """Return True for the no-RAG baseline experiment."""
+    return experiment == "baseline"
 
 
 @dataclass(frozen=True)
@@ -56,18 +46,6 @@ class HumanEvalTaskPaths:
         return self.task_dir / "translation.go"
 
     @property
-    def repair_prompt_json(self) -> Path:
-        return self.task_dir / "repair_prompt.json"
-
-    @property
-    def repair_raw_json(self) -> Path:
-        return self.task_dir / "repair_raw.json"
-
-    @property
-    def repaired_translation_go(self) -> Path:
-        return self.task_dir / "repaired_translation.go"
-
-    @property
     def evaluation_dir(self) -> Path:
         return self.task_dir / "evaluation"
 
@@ -82,18 +60,6 @@ class HumanEvalTaskPaths:
     @property
     def evaluation_result_json(self) -> Path:
         return self.evaluation_dir / "result.json"
-
-    @property
-    def evaluation_first_pass_result_json(self) -> Path:
-        return self.evaluation_dir / "first_pass_result.json"
-
-    @property
-    def evaluation_repaired_result_json(self) -> Path:
-        return self.evaluation_dir / "repaired_result.json"
-
-    @property
-    def evaluation_repaired_solution_go(self) -> Path:
-        return self.evaluation_dir / "repaired_solution.go"
 
 
 @dataclass(frozen=True)
@@ -166,8 +132,6 @@ def humaneval_run_root(
 
     if is_baseline_experiment(experiment):
         base = root / provider / variant / "baseline"
-        if experiment != "baseline":
-            base = root / provider / variant / experiment
         return base / f"run-{run_id}" if run_id is not None else base
 
     if backend_label is None:

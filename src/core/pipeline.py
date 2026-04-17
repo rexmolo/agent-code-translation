@@ -29,7 +29,6 @@ from src.core import reporting as _reporting
 from src.core.humaneval_artifacts import (
     HumanEvalRunPaths,
     append_jsonl,
-    base_experiment_name,
     humaneval_run_root,
     is_baseline_experiment,
     parse_humaneval_run_root,

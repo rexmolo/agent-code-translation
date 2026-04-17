@@ -26,7 +26,7 @@ embedding:
     model: "gemini-embedding-001"
     # Supported dimensions: 768 (small), 1050/1536 (medium), 3072 (full, default)
     # Uses Matryoshka Representation Learning — smaller dims need manual normalization.
-    dimensions: 768
+    dimensions: 3072
 
 # Vertex AI Vector Search configuration (used with Gemini embedding backend)
 vertex_ai:

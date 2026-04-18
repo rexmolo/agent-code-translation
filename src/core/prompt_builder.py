@@ -15,18 +15,52 @@ Usage:
 
 from __future__ import annotations
 
+import re
+
 from src.rag.schema import rag_result_has_usable_items
 from src.rag.rendering import sanitize_parallel_go_reference
 
 
 _HUMANEVAL_X_INSTRUCTIONS = (
-    "HumanEval-X instructions:\n"
-    "- Implement the provided Go signature only.\n"
-    "- Return only the Go declarations needed for that implementation.\n"
-    "- Do not include `main()` or demo/example I/O.\n"
+    "HumanEval-X output contract:\n"
+    "- Emit a complete Go file in this exact order:\n"
+    "    1. `package main`\n"
+    "    2. A single `import (...)` block listing every standard-library package the body calls "
+    "(e.g. `strings`, `sort`, `strconv`, `math`, `slices`, `regexp`, `unicode`, `fmt`).\n"
+    "    3. The function implementing the provided Go signature.\n"
+    "- Do not add `main()` or demo/example I/O.\n"
     "- Preserve the Python program's semantics and edge cases.\n"
-    "- Include package and import statements only if they are required by the implementation."
+    "- Retrieved snippets below are reference only — do not copy their package layout or omit "
+    "imports just because a snippet does."
 )
+
+_PARALLEL_REFERENCE_HEADER = (
+    "// Reference only — do NOT copy package/imports; add your own based on the APIs you use."
+)
+
+_GO_STDLIB_IMPORT_RE = re.compile(r"^([a-z][a-z0-9_/]*)\.")
+
+
+def _derive_import_path(go_api: str) -> str | None:
+    """Return the stdlib import path for a qualified Go API like `strings.Join`."""
+    if not go_api:
+        return None
+    text = go_api.strip().lstrip("`").lstrip("*&")
+    match = _GO_STDLIB_IMPORT_RE.match(text)
+    if not match:
+        return None
+    pkg = match.group(1)
+    if "/" in pkg or pkg in {
+        "strings", "strconv", "sort", "math", "slices", "regexp", "unicode",
+        "fmt", "errors", "bytes", "bufio", "os", "io", "time", "utf8", "utf16",
+    }:
+        return pkg
+    return pkg
+
+
+def _import_suffix(go_api: str) -> str:
+    pkg = _derive_import_path(go_api)
+    return f" (import `\"{pkg}\"`)" if pkg else ""
 
 _RETRIEVAL_USAGE_CONTRACT = (
     "Retrieval usage contract:\n"
@@ -96,7 +130,6 @@ class PromptBuilder:
             parts.append(
                 f"Use this Go function signature:\n```go\n{go_signature}\n```"
             )
-            parts.append(_HUMANEVAL_X_INSTRUCTIONS)
 
         # --- RAG sections (only if rag_result is provided and has content) ---
         if rag_result_has_usable_items(rag_result):
@@ -106,6 +139,10 @@ class PromptBuilder:
             parts.extend(self._rag_sections(rag_result, prompt_format=self._prompt_format))
         elif rag_result is not None:
             self._stamp_prompt_metadata(rag_result, includes_retrieval=False)
+
+        # --- HumanEval-X output contract LAST, so it's most salient to the model ---
+        if go_signature:
+            parts.append(_HUMANEVAL_X_INSTRUCTIONS)
 
         return "\n\n".join(parts)
 
@@ -156,7 +193,7 @@ class PromptBuilder:
         # API mappings
         if rag_result.api_mappings:
             lines = [
-                f"- `{m['python_api']}` → `{m['go_api']}`: {m['description']}"
+                f"- `{m['python_api']}` → `{m['go_api']}`{_import_suffix(m['go_api'])}: {m['description']}"
                 for m in rag_result.api_mappings
             ]
             sections.append(
@@ -171,7 +208,7 @@ class PromptBuilder:
                 go_code = sanitize_parallel_go_reference(p["go_code"])
                 blocks.append(
                     f"Python:\n```python\n{p['python_code']}\n```\n"
-                    f"Go:\n```go\n{go_code}\n```"
+                    f"Go:\n```go\n{_PARALLEL_REFERENCE_HEADER}\n{go_code}\n```"
                 )
             sections.append(
                 "Here are optional Python-Go reference examples to help you understand "
@@ -183,7 +220,7 @@ class PromptBuilder:
         if rag_result.documentation:
             lines = []
             for d in rag_result.documentation:
-                entry = f"- **{d['api']}**: {d['description']}"
+                entry = f"- **{d['api']}**{_import_suffix(d['api'])}: {d['description']}"
                 if d.get("example"):
                     entry += f"\n  ```go\n  {d['example']}\n  ```"
                 lines.append(entry)
@@ -221,7 +258,7 @@ class PromptBuilder:
 
         if rag_result.api_mappings:
             lines = [
-                f"- `{mapping['python_api']}` -> `{mapping['go_api']}`: {mapping['description']}"
+                f"- `{mapping['python_api']}` -> `{mapping['go_api']}`{_import_suffix(mapping['go_api'])}: {mapping['description']}"
                 for mapping in rag_result.api_mappings
             ]
             sections.append(
@@ -237,7 +274,8 @@ class PromptBuilder:
                     f"- Python `{python_code}` -> Go `{go_code}`"
                 )
             sections.append(
-                "Optional reference pairs:\n\n" + "\n".join(lines)
+                "Optional reference pairs (reference only — do NOT copy package/imports):\n\n"
+                + "\n".join(lines)
             )
 
         if rag_result.documentation:
@@ -248,7 +286,7 @@ class PromptBuilder:
                     example = " ".join(doc["example"].split())
                     usage_note = f"{usage_note} Usage: `{example}`"
                 lines.append(
-                    f"- API `{doc['api']}`: {usage_note}"
+                    f"- API `{doc['api']}`{_import_suffix(doc['api'])}: {usage_note}"
                 )
             sections.append(
                 "Relevant Go documentation:\n\n" + "\n".join(lines)

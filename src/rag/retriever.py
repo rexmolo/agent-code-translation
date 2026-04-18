@@ -861,6 +861,14 @@ def _normalize_kb_toggles(kb_toggles: dict[str, bool] | None) -> dict[str, bool]
     return normalized
 
 
+def _merged_retrieval_config(retrieval_config: dict | None = None) -> dict:
+    """Merge optional artifact-only overrides onto the configured retrieval defaults."""
+    config = dict(_cfg()["retrieval"])
+    if retrieval_config:
+        config.update(retrieval_config)
+    return config
+
+
 def build_retrieval_artifact(
     rag_result: RAGResult,
     *,
@@ -873,7 +881,7 @@ def build_retrieval_artifact(
     This is intentionally independent from pipeline path handling so callers can
     persist the returned dict wherever they want.
     """
-    config = dict(retrieval_config or _cfg()["retrieval"])
+    config = _merged_retrieval_config(retrieval_config)
     items = {
         "grammar_mappings": deepcopy(rag_result.grammar_mappings),
         "parallel_corpus": deepcopy(rag_result.parallel_corpus),
@@ -952,7 +960,7 @@ def build_empty_retrieval_artifact(
     kb_toggles: dict[str, bool] | None = None,
     retrieval_config: dict | None = None,
 ) -> dict:
-    config = retrieval_config or _cfg()["retrieval"]
+    config = _merged_retrieval_config(retrieval_config)
     rag_result = RAGResult()
     rag_result.source_traces = _empty_source_traces(config)
     rag_result.prompt_metadata = {

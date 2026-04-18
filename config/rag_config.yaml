@@ -69,10 +69,10 @@ retrieval:
       max_merged_rank: 1
     api_mappings:
       max_accepted_items: 2
-      max_merged_rank: 3
+      max_merged_rank: 4
     documentation:
       max_accepted_items: 1
-      max_merged_rank: 2
+      max_merged_rank: 3
     api_sequences:
       max_accepted_items: 2
       max_merged_rank: 2

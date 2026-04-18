@@ -156,6 +156,24 @@ def test_build_empty_retrieval_artifact_uses_frozen_schema():
     assert artifact["sources"]["parallel_corpus"]["acceptance"]["enabled"] is True
 
 
+def test_build_retrieval_artifact_merges_partial_prompt_overrides():
+    rag_result = RAGResult()
+
+    artifact = build_retrieval_artifact(
+        rag_result,
+        embedding_backend="chromadb",
+        retrieval_config={"prompt_format": "compact"},
+    )
+
+    assert artifact["retrieval_config"]["parallel_corpus_k"] == 1
+    assert artifact["retrieval_config"]["api_mappings_k"] == 2
+    assert artifact["retrieval_config"]["go_docs_k"] == 1
+    assert artifact["retrieval_config"]["rrf_k"] == 60
+    assert artifact["retrieval_config"]["prompt_format"] == "compact"
+    assert artifact["retrieval_config"]["retrieval_contract"] is None
+    assert artifact["sources"]["parallel_corpus"]["acceptance"]["enabled"] is False
+
+
 def test_route_kb_toggles_prefers_api_sources_for_api_heavy_tasks():
     routed, metadata = _route_kb_toggles(
         {

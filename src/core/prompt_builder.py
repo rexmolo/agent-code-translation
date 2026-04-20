@@ -84,6 +84,10 @@ def _compact_code_snippet(text: str, *, limit: int = 96) -> str:
     return collapsed[: limit - 3].rstrip() + "..."
 
 
+def _trap_trigger_text(trap: dict) -> str:
+    return trap.get("python_signal") or "deterministic source markers"
+
+
 class PromptBuilder:
     """Assembles the translation prompt from Python source and optional RAG results."""
 
@@ -239,6 +243,21 @@ class PromptBuilder:
                 + "\n".join(lines)
             )
 
+        if getattr(rag_result, "translation_traps", None):
+            lines = []
+            for trap in rag_result.translation_traps:
+                entry = (
+                    f"- **{trap['title']}**\n"
+                    f"  Trigger: {_trap_trigger_text(trap)}\n"
+                    f"  Avoid:\n  ```go\n  {trap.get('avoid_pattern', '').strip()}\n  ```\n"
+                    f"  Prefer:\n  ```go\n  {trap.get('go_pattern', '').strip()}\n  ```"
+                )
+                lines.append(entry)
+            sections.append(
+                "Here are relevant translation traps from the frozen CodeNet taxonomy:\n\n"
+                + "\n\n".join(lines)
+            )
+
         return sections
 
     def _compact_rag_sections(self, rag_result) -> list[str]:
@@ -299,6 +318,21 @@ class PromptBuilder:
             ]
             sections.append(
                 "Relevant Go API usage sequences:\n\n" + "\n".join(lines)
+            )
+
+        if getattr(rag_result, "translation_traps", None):
+            lines = []
+            for trap in rag_result.translation_traps:
+                prefer = _compact_code_snippet(trap.get("go_pattern", ""))
+                avoid = _compact_code_snippet(trap.get("avoid_pattern", ""))
+                lines.append(
+                    f"- {trap['title']}\n"
+                    f"  Trigger: {_trap_trigger_text(trap)}\n"
+                    f"  Prefer: `{prefer}`\n"
+                    f"  Avoid: `{avoid}`"
+                )
+            sections.append(
+                "Relevant translation traps:\n\n" + "\n".join(lines)
             )
 
         return sections

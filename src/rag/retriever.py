@@ -604,6 +604,7 @@ _EXPERIMENT_KB_PRESETS: dict[str, dict[str, bool]] = {
     "rag-pattern-api-docs": {"grammar": True,  "parallel_corpus": False, "api_mappings": True,  "documentation": True,  "api_sequences": False},
     "rag-full":             {"grammar": True,  "parallel_corpus": True,  "api_mappings": True,  "documentation": True,  "api_sequences": False},
     "rag-routed":           {"grammar": True,  "parallel_corpus": True,  "api_mappings": True,  "documentation": True,  "api_sequences": True},
+    "rag-traps-codenet-v1": {"grammar": False, "parallel_corpus": False, "api_mappings": False, "documentation": False, "api_sequences": False, "translation_traps": True},
 }
 
 
@@ -646,7 +647,7 @@ def get_active_kb_toggles(experiment: str) -> dict[str, bool] | None:
     if experiment in _EXPERIMENT_KB_PRESETS:
         return _EXPERIMENT_KB_PRESETS[experiment]
     return _cfg().get("knowledge_bases", {
-        "code_snippets": True, "api_mappings": True, "documentation": True, "api_sequences": False,
+        "code_snippets": True, "api_mappings": True, "documentation": True, "api_sequences": False, "translation_traps": False,
     })
 
 
@@ -662,7 +663,7 @@ def _get_kb_toggles() -> dict[str, bool]:
     if _kb_overrides is not None:
         return _kb_overrides
     return _cfg().get("knowledge_bases", {
-        "code_snippets": True, "api_mappings": True, "documentation": True, "api_sequences": False,
+        "code_snippets": True, "api_mappings": True, "documentation": True, "api_sequences": False, "translation_traps": False,
     })
 
 
@@ -808,6 +809,7 @@ class RAGResult:
         "grammar_mappings",
         "parallel_corpus",
         "api_sequences",
+        "translation_traps",
         "context",
         "source_traces",
         "router_metadata",
@@ -821,6 +823,7 @@ class RAGResult:
         self.grammar_mappings: list[dict] = []
         self.parallel_corpus: list[dict] = []
         self.api_sequences: list[dict] = []
+        self.translation_traps: list[dict] = []
         self.context: str = ""
         self.source_traces: dict[str, dict] = _empty_source_traces()
         self.router_metadata: dict = {
@@ -888,6 +891,7 @@ def build_retrieval_artifact(
         "api_mappings": deepcopy(rag_result.api_mappings),
         "documentation": deepcopy(rag_result.documentation),
         "api_sequences": deepcopy(rag_result.api_sequences),
+        "translation_traps": deepcopy(getattr(rag_result, "translation_traps", [])),
     }
     source_traces = _empty_source_traces(config)
     for source_name, trace in getattr(rag_result, "source_traces", {}).items():
@@ -928,6 +932,7 @@ def build_retrieval_artifact(
             "api_mappings_k": config.get("api_mappings_k"),
             "go_docs_k": config.get("go_docs_k"),
             "api_sequences_k": config.get("api_sequences_k"),
+            "translation_traps_k": config.get("translation_traps_k"),
             "rrf_k": config.get("rrf_k"),
             "enable_confidence_gate": config.get("enable_confidence_gate"),
             "hard_fallback_to_no_retrieval": config.get("hard_fallback_to_no_retrieval"),
@@ -979,6 +984,7 @@ def build_empty_retrieval_artifact(
 def build_translation_context(
     python_code: str,
     embedding_backend: str = "chromadb",
+    go_signature: str | None = None,
 ) -> RAGResult:
     """Query pipeline for Python-to-Go translation context.
 
@@ -992,6 +998,7 @@ def build_translation_context(
     Args:
         python_code: The source Python code to translate.
         embedding_backend: "chromadb" for ChromaDB or "gemini" for Vertex AI.
+        go_signature: Optional Go signature for deterministic trap routing.
 
     Returns a RAGResult with raw retrieved items and the formatted context string.
     """
@@ -1048,6 +1055,28 @@ def build_translation_context(
     use_api = kb.get("api_mappings", False)
     use_docs = kb.get("documentation", False)
     use_api_sequences = kb.get("api_sequences", False)
+    use_translation_traps = kb.get("translation_traps", False)
+
+    if use_translation_traps:
+        from src.rag.trap_router import route_translation_traps
+
+        traps, trace = route_translation_traps(
+            python_code,
+            go_signature=go_signature,
+            limit=cfg.get("translation_traps_k", 2),
+        )
+        result.translation_traps = traps
+        result.source_traces["translation_traps"] = trace
+        if traps:
+            lines = []
+            for trap in traps:
+                lines.append(
+                    f"- {trap['title']}\n"
+                    f"  Trigger: {trap.get('python_signal', 'deterministic source markers')}\n"
+                    f"  Avoid: {trap.get('avoid_pattern', '').strip()}\n"
+                    f"  Prefer: {trap.get('go_pattern', '').strip()}"
+                )
+            sections.append("## Translation Traps\n\n" + "\n".join(lines))
 
     # Step A: grammar_mappings — tree-sitter detects which constructs are present,
     # then query once per detected construct for a precise per-category match.

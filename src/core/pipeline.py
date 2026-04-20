@@ -64,6 +64,8 @@ def _chroma_backend_label() -> str:
 def _humaneval_backend_label(experiment: str, embedding_backend: str) -> str | None:
     if is_baseline_experiment(experiment):
         return None
+    if experiment == "rag-traps-codenet-v1":
+        return "rule-traps"
     if embedding_backend == "gemini":
         return "vec-gemini"
     return _chroma_backend_label()
@@ -226,13 +228,18 @@ def _get_rag_result(
     python_code: str,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
+    go_signature: str | None = None,
 ):
     """Retrieve RAG result, returning None if unavailable or not needed."""
     if is_baseline_experiment(experiment):
         return None
     try:
         from src.rag.retriever import build_translation_context
-        rag_result = build_translation_context(python_code, embedding_backend=embedding_backend)
+        rag_result = build_translation_context(
+            python_code,
+            embedding_backend=embedding_backend,
+            go_signature=go_signature,
+        )
         log_rag_retrieval(rag_result)
         return rag_result
     except Exception:
@@ -260,6 +267,7 @@ def _setup_and_display_kb(
         "api_mappings":    "API Mappings",
         "documentation":   "Go Docs",
         "api_sequences":   "API Sequences",
+        "translation_traps": "Translation Traps",
     }
     parts = []
     for key, label in labels.items():
@@ -267,8 +275,15 @@ def _setup_and_display_kb(
         tag = "[green]ON[/green]" if enabled else "[red]OFF[/red]"
         parts.append(f"{label}: {tag}")
     console.print(f"   RAG: {' | '.join(parts)}")
-    backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
-    console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
+    uses_embeddings = any(
+        toggles.get(key, False)
+        for key in ("grammar", "parallel_corpus", "api_mappings", "documentation", "api_sequences")
+    )
+    if uses_embeddings:
+        backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
+        console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
+    else:
+        console.print("   Embedding: [dim]not used (deterministic trap routing)[/dim]")
 
 
 def _parse_target_path(target_dir: Path) -> tuple[str, str, str, str | None, int | None]:
@@ -654,7 +669,12 @@ def _translate_humaneval_x(
             task_paths = run_paths.task(task_num)
             log_translation_start(pair["task_id"], provider_key, variant_key)
 
-            rag_result = _get_rag_result(pair["py_solution"], experiment, embedding_backend)
+            rag_result = _get_rag_result(
+                pair["py_solution"],
+                experiment,
+                embedding_backend,
+                go_signature=pair["declaration"],
+            )
             prompt = _prompt_builder.build_humaneval_x(
                 pair["py_solution"],
                 go_signature=pair["declaration"],

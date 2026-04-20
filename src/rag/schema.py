@@ -8,6 +8,7 @@ RAG_SOURCES = (
     "api_mappings",
     "documentation",
     "api_sequences",
+    "translation_traps",
 )
 
 

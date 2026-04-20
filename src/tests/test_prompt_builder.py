@@ -279,3 +279,35 @@ class TestPromptBuilder:
 
         assert "Relevant Go API usage sequences:" in prompt
         assert "strings.TrimSpace -> strings.Split -> strings.Join" in prompt
+
+    def test_compact_prompt_renders_translation_traps(self):
+        rag_result = SimpleNamespace(
+            grammar_mappings=[],
+            api_mappings=[],
+            parallel_corpus=[],
+            documentation=[],
+            api_sequences=[],
+            translation_traps=[
+                {
+                    "trap_id": "trap_stdin_parsing_contract",
+                    "title": "Python input() semantics do not survive the naive port to Go",
+                    "python_signal": "input().split(), map(int, input().split())",
+                    "go_pattern": "scanner := bufio.NewScanner(os.Stdin)\nscanner.Split(bufio.ScanWords)",
+                    "avoid_pattern": "fmt.Scan(&n) in a loop",
+                }
+            ],
+            prompt_metadata={},
+        )
+
+        prompt = PromptBuilder(
+            prompt_format="compact",
+            retrieval_contract=True,
+        ).build(
+            python_code="def f():\n    return 1\n",
+            rag_result=rag_result,
+        )
+
+        assert "Relevant translation traps:" in prompt
+        assert "Python input() semantics do not survive the naive port to Go" in prompt
+        assert "Trigger: input().split(), map(int, input().split())" in prompt
+        assert "fmt.Scan(&n) in a loop" in prompt

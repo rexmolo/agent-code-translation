@@ -156,11 +156,9 @@ def parse_humaneval_run_root(run_root: Path) -> tuple[str, str, str, str | None,
     if parent.startswith("run-"):
         run_id = int(parent.split("-", 1)[1])
         backend = parts[-3]
-        if backend.startswith("vec-"):
-            return parts[-5], parts[-4], last, backend, run_id
-        return parts[-4], parts[-3], last, None, run_id
+        return parts[-5], parts[-4], last, backend, run_id
 
-    if parent.startswith("vec-"):
+    if parent.startswith("vec-") or parent.startswith("rule-"):
         return parts[-4], parts[-3], last, parent, None
     return parts[-3], parts[-2], last, None, None
 

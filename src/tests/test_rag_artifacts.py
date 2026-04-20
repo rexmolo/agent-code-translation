@@ -37,6 +37,7 @@ def test_build_retrieval_artifact_serializes_counts_and_items():
     rag_result.api_mappings = [{"python_api": "len", "go_api": "len"}]
     rag_result.documentation = [{"api": "strings.TrimSpace", "description": "trim"}]
     rag_result.api_sequences = [{"sequence_text": "strings.TrimSpace -> strings.Split"}]
+    rag_result.translation_traps = [{"trap_id": "trap_top_level_statements_outside_main", "title": "wrap top-level code in main"}]
     rag_result.context = "retrieved context"
     rag_result.source_traces["api_mappings"] = {
         "source": "api_mappings",
@@ -58,6 +59,7 @@ def test_build_retrieval_artifact_serializes_counts_and_items():
             "api_mappings_k": 2,
             "go_docs_k": 1,
             "api_sequences_k": 2,
+            "translation_traps_k": 2,
             "rrf_k": 60,
             "enable_confidence_gate": True,
             "hard_fallback_to_no_retrieval": True,
@@ -80,8 +82,10 @@ def test_build_retrieval_artifact_serializes_counts_and_items():
         "api_mappings": 1,
         "documentation": 1,
         "api_sequences": 1,
+        "translation_traps": 1,
     }
     assert artifact["items"]["parallel_corpus"][0]["problem_id"] == "p0"
+    assert artifact["items"]["translation_traps"][0]["trap_id"] == "trap_top_level_statements_outside_main"
     assert artifact["sources"]["api_mappings"]["queried"] is True
     assert artifact["sources"]["api_mappings"]["items"][0]["retrieval"]["merged_rank"] == 1
     assert artifact["rendered_context"] == "retrieved context"
@@ -99,6 +103,7 @@ def test_rag_result_to_artifact_uses_same_payload_shape():
             "api_mappings_k": 2,
             "go_docs_k": 1,
             "api_sequences_k": 2,
+            "translation_traps_k": 2,
             "rrf_k": 60,
             "enable_confidence_gate": True,
             "hard_fallback_to_no_retrieval": True,
@@ -133,6 +138,7 @@ def test_build_empty_retrieval_artifact_uses_frozen_schema():
             "api_mappings_k": 2,
             "go_docs_k": 1,
             "api_sequences_k": 2,
+            "translation_traps_k": 2,
             "rrf_k": 60,
             "enable_confidence_gate": True,
             "hard_fallback_to_no_retrieval": True,
@@ -152,6 +158,7 @@ def test_build_empty_retrieval_artifact_uses_frozen_schema():
         "api_mappings",
         "documentation",
         "api_sequences",
+        "translation_traps",
     }
     assert artifact["sources"]["parallel_corpus"]["acceptance"]["enabled"] is True
 
@@ -170,6 +177,7 @@ def test_build_retrieval_artifact_merges_partial_prompt_overrides():
     assert artifact["retrieval_config"]["go_docs_k"] == 1
     assert artifact["retrieval_config"]["rrf_k"] == 60
     assert artifact["retrieval_config"]["prompt_format"] == "compact"
+    assert artifact["retrieval_config"]["translation_traps_k"] is None
     assert artifact["retrieval_config"]["retrieval_contract"] is None
     assert artifact["sources"]["parallel_corpus"]["acceptance"]["enabled"] is False
 

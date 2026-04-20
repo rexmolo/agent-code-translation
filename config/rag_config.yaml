@@ -41,6 +41,7 @@ retrieval:
   api_mappings_k: 2
   go_docs_k: 1
   api_sequences_k: 2
+  translation_traps_k: 2
 
   # Reciprocal Rank Fusion constant (higher = more uniform weighting)
   rrf_k: 60
@@ -76,6 +77,8 @@ retrieval:
     api_sequences:
       max_accepted_items: 2
       max_merged_rank: 2
+    translation_traps:
+      max_accepted_items: 2
 
 # Knowledge base toggles for ablation experiments.
 # Set to false to disable a specific knowledge base during retrieval.
@@ -84,3 +87,4 @@ knowledge_bases:
   api_mappings: true         # Python -> Go API equivalences
   documentation: true        # Go standard library docs & patterns
   api_sequences: false       # Go API usage sequence retrieval
+  translation_traps: false   # Frozen deterministic trap taxonomy from CodeNet + bug annotations

@@ -24,6 +24,9 @@
 - The tasks will be assigned in this location .doc/Tasks/01 - tasks, activate means that task is processing and it will be moved into test after finished. then will be moved into complete after finishing test.
 - Always remember the output of the traslation from the LLMs should be feed into the evaluation piepline to check if the rag help improving the performence, don't do post-processing work, like teak the output from LLMS in order to improve the performence.
 
+## Tips
+- Whenever I mention Minimax, you can go to this directory(.doc/memory) to look for the information.
+
 
 ## Thinking
 - Think if it will affect the final result whenever you are going to change files and make decitions, because we are evaluating the model output

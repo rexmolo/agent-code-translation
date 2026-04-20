@@ -15,13 +15,13 @@ class TestPromptBuilder:
         )
 
         assert "func add(a int, b int) int" in prompt
-        assert "HumanEval-X instructions:" in prompt
+        assert "HumanEval-X output contract:" in prompt
         assert "standalone program" not in prompt
-        assert "Implement the provided Go signature only." in prompt
-        assert "Return only the Go declarations needed for that implementation." in prompt
-        assert "Do not include `main()` or demo/example I/O." in prompt
+        assert "Emit a complete Go file in this exact order:" in prompt
+        assert "The function implementing the provided Go signature." in prompt
+        assert "Do not add `main()` or demo/example I/O." in prompt
         assert "Preserve the Python program's semantics and edge cases." in prompt
-        assert "package and import statements only if they are required" in prompt
+        assert "A single `import (...)` block listing every standard-library package the body calls" in prompt
 
     def test_shared_agent_instructions_no_longer_require_standalone_programs(self):
         agents_source = Path(__file__).resolve().parents[1] / "core" / "agents.py"
@@ -212,7 +212,7 @@ class TestPromptBuilder:
             rag_result=rag_result,
         )
 
-        assert "Optional reference pairs:" in prompt
+        assert "Optional reference pairs (reference only" in prompt
         assert "..." in prompt
 
     def test_sanitize_parallel_go_reference_strips_program_scaffolding(self):

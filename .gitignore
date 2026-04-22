@@ -51,7 +51,12 @@ src/temp/
 .env
 .env.example
 config/providers.yaml
-.doc
+.doc/
 mlruns/
 reports/
 .agents/
+AGENTS.md
+agents.md
+agent.md
+CLAUDE.md
+claude.md

@@ -177,9 +177,9 @@ def test_build_retrieval_artifact_merges_partial_prompt_overrides():
     assert artifact["retrieval_config"]["go_docs_k"] == 1
     assert artifact["retrieval_config"]["rrf_k"] == 60
     assert artifact["retrieval_config"]["prompt_format"] == "compact"
-    assert artifact["retrieval_config"]["translation_traps_k"] is None
-    assert artifact["retrieval_config"]["retrieval_contract"] is None
-    assert artifact["sources"]["parallel_corpus"]["acceptance"]["enabled"] is False
+    assert artifact["retrieval_config"]["translation_traps_k"] == 2
+    assert artifact["retrieval_config"]["retrieval_contract"] is True
+    assert artifact["sources"]["parallel_corpus"]["acceptance"]["enabled"] is True
 
 
 def test_route_kb_toggles_prefers_api_sources_for_api_heavy_tasks():

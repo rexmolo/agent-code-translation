@@ -8,6 +8,16 @@ from pathlib import Path
 from typing import Iterable
 
 
+def base_experiment_name(experiment: str) -> str:
+    """Return the canonical experiment preset name."""
+    return experiment
+
+
+def is_baseline_experiment(experiment: str) -> bool:
+    """Return True for the no-RAG baseline experiment."""
+    return experiment == "baseline"
+
+
 @dataclass(frozen=True)
 class HumanEvalTaskPaths:
     """Filesystem paths for a single HumanEval-X task bundle."""
@@ -120,7 +130,7 @@ def humaneval_run_root(
 ) -> Path:
     """Return the canonical HumanEval-X run root for a configuration."""
 
-    if experiment == "baseline":
+    if is_baseline_experiment(experiment):
         base = root / provider / variant / "baseline"
         return base / f"run-{run_id}" if run_id is not None else base
 
@@ -140,19 +150,15 @@ def parse_humaneval_run_root(run_root: Path) -> tuple[str, str, str, str | None,
     if last.startswith("run-"):
         run_id = int(last.split("-", 1)[1])
         parent = parts[-2]
-        if parent == "baseline":
-            return parts[-4], parts[-3], "baseline", None, run_id
-        return parts[-4], parts[-3], "baseline", None, run_id
+        return parts[-4], parts[-3], parent, None, run_id
 
     parent = parts[-2]
     if parent.startswith("run-"):
         run_id = int(parent.split("-", 1)[1])
         backend = parts[-3]
-        if backend.startswith("vec-"):
-            return parts[-5], parts[-4], last, backend, run_id
-        return parts[-4], parts[-3], last, None, run_id
+        return parts[-5], parts[-4], last, backend, run_id
 
-    if parent.startswith("vec-"):
+    if parent.startswith("vec-") or parent.startswith("rule-"):
         return parts[-4], parts[-3], last, parent, None
     return parts[-3], parts[-2], last, None, None
 

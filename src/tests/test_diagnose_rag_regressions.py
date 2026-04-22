@@ -19,16 +19,17 @@ def _write_task_bundle(
     task_id: str,
     *,
     pass_at_1: bool,
-    parallel_corpus_hits: int = 0,
+    retrieval_counts: dict[str, int] | None = None,
 ) -> None:
     task_dir = run_root / "tasks" / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
     _write_json(task_dir / "prompt.json", {"task_id": task_id, "user_prompt": "prompt"})
+    counts = retrieval_counts or {}
     _write_json(
         task_dir / "retrieval.json",
         {
-            "retrieval_counts": {"parallel_corpus": parallel_corpus_hits},
-            "items": {"parallel_corpus": [{} for _ in range(parallel_corpus_hits)]},
+            "retrieval_counts": counts,
+            "items": {key: [{} for _ in range(value)] for key, value in counts.items()},
         },
     )
     _write_json(task_dir / "llm_raw.json", {"available": False, "format": None, "payload": None, "note": "n/a"})
@@ -45,8 +46,13 @@ def test_analyze_regressions_identifies_baseline_pass_rag_fail(tmp_path):
     rag = tmp_path / "vec-chroma-768" / "run-1" / "rag-full"
     _write_task_bundle(baseline, "Go_0", pass_at_1=True)
     _write_task_bundle(baseline, "Go_1", pass_at_1=True)
-    _write_task_bundle(rag, "Go_0", pass_at_1=False, parallel_corpus_hits=1)
-    _write_task_bundle(rag, "Go_1", pass_at_1=True, parallel_corpus_hits=0)
+    _write_task_bundle(
+        rag,
+        "Go_0",
+        pass_at_1=False,
+        retrieval_counts={"parallel_corpus": 1, "api_mappings": 2},
+    )
+    _write_task_bundle(rag, "Go_1", pass_at_1=True)
 
     summary = analyze_regressions(baseline, [rag])
 
@@ -56,14 +62,22 @@ def test_analyze_regressions_identifies_baseline_pass_rag_fail(tmp_path):
     assert run_summary["comparable_tasks"] == 2
     assert len(run_summary["regressions"]) == 1
     assert run_summary["regressions"][0]["task_id"] == "Go_0"
-    assert run_summary["regressions"][0]["parallel_corpus_hits"] == 1
+    assert run_summary["regressions"][0]["source_counts"] == {
+        "parallel_corpus": 1,
+        "api_mappings": 2,
+    }
 
 
 def test_write_reports_copies_case_artifacts(tmp_path):
     baseline = tmp_path / "baseline" / "run-1"
     rag = tmp_path / "vec-chroma-768" / "run-1" / "rag-full"
     _write_task_bundle(baseline, "Go_3", pass_at_1=True)
-    _write_task_bundle(rag, "Go_3", pass_at_1=False, parallel_corpus_hits=2)
+    _write_task_bundle(
+        rag,
+        "Go_3",
+        pass_at_1=False,
+        retrieval_counts={"parallel_corpus": 2, "grammar_mappings": 1},
+    )
 
     summary = analyze_regressions(baseline, [rag])
     output_dir = tmp_path / "diagnostics"
@@ -78,7 +92,13 @@ def test_write_reports_copies_case_artifacts(tmp_path):
     assert (case_dir / "retrieval.json").is_file()
     assert (case_dir / "translation.go").is_file()
     assert (case_dir / "solution.go").is_file()
-    assert json.loads(copied_case.read_text(encoding="utf-8"))["parallel_corpus_hits"] == 2
+    assert json.loads(copied_case.read_text(encoding="utf-8"))["source_counts"] == {
+        "parallel_corpus": 2,
+        "grammar_mappings": 1,
+    }
+
+    summary_md = (output_dir / "summary.md").read_text(encoding="utf-8")
+    assert "source counts = grammar_mappings=1, parallel_corpus=2" in summary_md
 
 
 def test_main_handles_empty_regressions_and_filters(tmp_path):

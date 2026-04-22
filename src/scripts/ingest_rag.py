@@ -14,6 +14,7 @@ from rich.progress import Progress
 from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
+    GO_API_SEQUENCES_FILE,
     GRAMMAR_MAPPINGS_FILE,
     PARALLEL_CORPUS_FILE,
 )
@@ -174,10 +175,43 @@ def ingest_go_docs(client, ef, dimensions: int | None = None):
     console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
 
 
+def ingest_api_sequences(client, ef, dimensions: int | None = None):
+    coll_name = collection_name_with_dim("api_sequences", dimensions)
+    console.print(f"\n[bold]Ingesting API sequences[/bold] from {GO_API_SEQUENCES_FILE}")
+    records = _load_jsonl(GO_API_SEQUENCES_FILE)
+    console.print(f"  Loaded {len(records)} records")
+
+    try:
+        client.delete_collection(coll_name)
+        console.print(f"  Cleared existing {coll_name} collection.")
+    except Exception:
+        pass
+    collection = get_or_create_collection(client, coll_name, ef)
+
+    ids = []
+    documents = []
+    metadatas = []
+    for i, r in enumerate(records):
+        doc_id = r.get("_id") or f"api_seq_go_{i + 1:06d}"
+        ids.append(doc_id)
+        documents.append(r["sequence_text"])
+        metadatas.append({
+            "language": r.get("language", "go"),
+            "source_corpus": r.get("source_corpus", ""),
+            "file_path": r.get("file_path", ""),
+            "function_name": r.get("function_name", ""),
+            "apis": json.dumps(r.get("apis", []), ensure_ascii=True),
+            "imports": json.dumps(r.get("imports", []), ensure_ascii=True),
+        })
+
+    _upsert_batched(collection, ids, documents, metadatas)
+    console.print(f"  [green]Done![/green] Collection '{collection.name}' has {collection.count()} entries.")
+
+
 @click.command()
 @click.option(
     "--collection",
-    type=click.Choice(["grammar_mappings", "parallel_corpus", "api_mappings", "go_docs", "all"]),
+    type=click.Choice(["grammar_mappings", "parallel_corpus", "api_mappings", "go_docs", "api_sequences", "all"]),
     default="all",
     help="Which collection(s) to ingest.",
 )
@@ -215,6 +249,8 @@ def main(collection: str, dimensions: int | None):
         ingest_api_mappings(client, ef, dimensions)
     if collection in ("go_docs", "all"):
         ingest_go_docs(client, ef, dimensions)
+    if collection in ("api_sequences", "all"):
+        ingest_api_sequences(client, ef, dimensions)
 
     console.print("\n[bold green]All done![/bold green]")
 

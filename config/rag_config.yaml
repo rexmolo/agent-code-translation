@@ -26,7 +26,7 @@ embedding:
     model: "gemini-embedding-001"
     # Supported dimensions: 768 (small), 1050/1536 (medium), 3072 (full, default)
     # Uses Matryoshka Representation Learning — smaller dims need manual normalization.
-    dimensions: 768
+    dimensions: 3072
 
 # Vertex AI Vector Search configuration (used with Gemini embedding backend)
 vertex_ai:
@@ -40,9 +40,45 @@ retrieval:
   parallel_corpus_k: 1
   api_mappings_k: 2
   go_docs_k: 1
+  api_sequences_k: 2
+  translation_traps_k: 2
 
   # Reciprocal Rank Fusion constant (higher = more uniform weighting)
   rrf_k: 60
+
+  # Confidence gating
+  enable_confidence_gate: true
+  hard_fallback_to_no_retrieval: true
+  prompt_format: compact
+  retrieval_contract: true
+  router:
+    mode: rule_based
+    min_api_calls_for_api_mappings: 1
+    min_imports_for_api_mappings: 1
+    min_api_calls_for_api_sequences: 2
+    min_grammar_patterns_for_grammar: 1
+    max_api_calls_for_parallel: 1
+    max_imports_for_parallel: 1
+    max_grammar_patterns_for_parallel: 1
+    disable_parallel_on_error_handling: true
+  source_rules:
+    grammar_mappings:
+      max_accepted_items: 3
+      max_merged_rank: 1
+    parallel_corpus:
+      max_accepted_items: 1
+      max_merged_rank: 1
+    api_mappings:
+      max_accepted_items: 2
+      max_merged_rank: 4
+    documentation:
+      max_accepted_items: 1
+      max_merged_rank: 3
+    api_sequences:
+      max_accepted_items: 2
+      max_merged_rank: 2
+    translation_traps:
+      max_accepted_items: 2
 
 # Knowledge base toggles for ablation experiments.
 # Set to false to disable a specific knowledge base during retrieval.
@@ -50,3 +86,5 @@ knowledge_bases:
   code_snippets: false        # Parallel corpus (Python-Go translation examples)
   api_mappings: true         # Python -> Go API equivalences
   documentation: true        # Go standard library docs & patterns
+  api_sequences: false       # Go API usage sequence retrieval
+  translation_traps: false   # Frozen deterministic trap taxonomy from CodeNet + bug annotations

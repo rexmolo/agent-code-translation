@@ -226,6 +226,7 @@ def _interactive():
                 Choice(title="rag-pattern-samples", value="rag-pattern-samples"),
                 Choice(title="rag-pattern-api-docs", value="rag-pattern-api-docs"),
                 Choice(title="rag-full", value="rag-full"),
+                Choice(title="rag-routed", value="rag-routed"),
                 Choice(title="Custom...", value="_custom"),
             ]
             selected_experiment = _ask_or_abort(questionary.select(
@@ -352,7 +353,15 @@ def cli(ctx):
     "--dimension", type=int, default=None,
     help="Override embedding dimension (e.g. 768, 1536, 3072).",
 )
-def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend, run, dimension):
+@click.option(
+    "--prompt-format", type=click.Choice(["verbose", "compact"]), default=None,
+    help="Override retrieval prompt packaging format for this run.",
+)
+@click.option(
+    "--retrieval-contract/--no-retrieval-contract", default=None,
+    help="Override whether the retrieval usage contract is included for this run.",
+)
+def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provider, variant, sample, problems, verbose, embedding_backend, run, dimension, prompt_format, retrieval_contract):
     """Run translation pipeline."""
     if verbose:
         set_verbose(True)
@@ -361,7 +370,14 @@ def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provi
         set_dimension_override(dimension)
     if provider and variant:
         enable_model(provider, variant)
-    kwargs = {"skip_preflight": skip_preflight, "dataset": dataset, "experiment": experiment, "embedding_backend": embedding_backend}
+    kwargs = {
+        "skip_preflight": skip_preflight,
+        "dataset": dataset,
+        "experiment": experiment,
+        "embedding_backend": embedding_backend,
+        "prompt_format": prompt_format,
+        "retrieval_contract": retrieval_contract,
+    }
     if run is not None:
         kwargs["run_id"] = run
     if source_dir is not None:
@@ -397,7 +413,11 @@ def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provi
     "-V", "--verbose", is_flag=True, default=False,
     help="Enable verbose step-by-step logging.",
 )
-def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
+@click.option(
+    "--skip-existing", is_flag=True, default=False,
+    help="Skip HumanEval-X tasks that already have evaluation/result.json.",
+)
+def evaluate(dataset, source_dir, target_dir, batch_size, verbose, skip_existing):
     """Evaluate existing translated files."""
     if verbose:
         set_verbose(True)
@@ -408,6 +428,8 @@ def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
         kwargs["eval_target_dir"] = target_dir
     if batch_size is not None:
         kwargs["batch_size"] = batch_size
+    if skip_existing:
+        kwargs["skip_existing"] = True
     _pipeline.evaluate(**kwargs)
 
 
@@ -425,7 +447,23 @@ def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
 )
 @click.option("--skip-preflight", is_flag=True, default=False, help="Skip preflight checks.")
 @click.option("--run", type=int, default=None, help="Run number for multi-run experiments.")
-def run_all(provider, variant, mode, embedding_backend, skip_preflight, run):
-    """Run all 5 experiments in parallel (baseline + 4 RAG variants)."""
+@click.option(
+    "--prompt-format", type=click.Choice(["verbose", "compact"]), default=None,
+    help="Override retrieval prompt packaging format for all runs.",
+)
+@click.option(
+    "--retrieval-contract/--no-retrieval-contract", default=None,
+    help="Override whether the retrieval usage contract is included for all runs.",
+)
+def run_all(provider, variant, mode, embedding_backend, skip_preflight, run, prompt_format, retrieval_contract):
+    """Run all configured experiments in parallel."""
     enable_model(provider, variant)
-    _pipeline.run_all_humaneval_x(provider, variant, mode=mode, embedding_backend=embedding_backend, run_id=run)
+    _pipeline.run_all_humaneval_x(
+        provider,
+        variant,
+        mode=mode,
+        embedding_backend=embedding_backend,
+        run_id=run,
+        prompt_format=prompt_format,
+        retrieval_contract=retrieval_contract,
+    )

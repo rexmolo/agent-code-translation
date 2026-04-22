@@ -30,6 +30,7 @@ from src.core.humaneval_artifacts import (
     HumanEvalRunPaths,
     append_jsonl,
     humaneval_run_root,
+    is_baseline_experiment,
     parse_humaneval_run_root,
     write_json,
     write_text,
@@ -46,7 +47,11 @@ from src.core.logger import (
 from src.core.schemas import TranslationResult, EvaluationRecord
 from src.providers.registry import get_enabled_models, get_model_env_var, get_model_id, get_model_vertex_env_vars, resolve_provider_api_key
 from src.rag.embeddings import load_rag_config
-from src.rag.retriever import build_retrieval_artifact
+from src.rag.retriever import (
+    build_empty_retrieval_artifact,
+    build_retrieval_artifact,
+    rag_result_has_usable_items,
+)
 from src.scripts.diagnose_rag_regressions import analyze_regressions, write_reports
 
 
@@ -57,8 +62,10 @@ def _chroma_backend_label() -> str:
 
 
 def _humaneval_backend_label(experiment: str, embedding_backend: str) -> str | None:
-    if experiment == "baseline":
+    if is_baseline_experiment(experiment):
         return None
+    if experiment in {"rag-traps-codenet-v1", "rag-traps-codenet-v3"}:
+        return "rule-traps"
     if embedding_backend == "gemini":
         return "vec-gemini"
     return _chroma_backend_label()
@@ -117,6 +124,8 @@ def _prompt_payload(
     experiment: str,
     embedding_backend: str,
     kb_toggles: dict | None,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> dict:
     system_prompt = getattr(translator, "instructions", "")
     return {
@@ -128,6 +137,8 @@ def _prompt_payload(
         "experiment": experiment,
         "embedding_backend": embedding_backend,
         "kb_toggles": kb_toggles or {},
+        "prompt_format": prompt_format,
+        "retrieval_contract": retrieval_contract,
     }
 
 
@@ -141,6 +152,8 @@ def _write_run_manifest(
     backend_label: str | None,
     run_id: int | None,
     task_count: int,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> None:
     write_json(
         run_paths.manifest_json,
@@ -153,6 +166,8 @@ def _write_run_manifest(
             "backend_label": backend_label,
             "run_id": run_id,
             "task_count": task_count,
+            "prompt_format": prompt_format,
+            "retrieval_contract": retrieval_contract,
         },
     )
 
@@ -166,6 +181,19 @@ def _translation_record(task_id: str, task_paths, status: str) -> dict:
     }
 
 
+def _retrieval_config_overrides(
+    *,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
+) -> dict | None:
+    overrides: dict[str, object] = {}
+    if prompt_format is not None:
+        overrides["prompt_format"] = prompt_format
+    if retrieval_contract is not None:
+        overrides["retrieval_contract"] = retrieval_contract
+    return overrides or None
+
+
 def _maybe_write_rag_diagnostics(
     *,
     provider: str,
@@ -175,7 +203,7 @@ def _maybe_write_rag_diagnostics(
     run_paths: HumanEvalRunPaths,
 ) -> None:
     """Generate baseline-pass / RAG-fail diagnostics after evaluating a RAG run."""
-    if experiment == "baseline":
+    if is_baseline_experiment(experiment):
         return
 
     baseline_run = humaneval_run_root(
@@ -200,13 +228,18 @@ def _get_rag_result(
     python_code: str,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
+    go_signature: str | None = None,
 ):
     """Retrieve RAG result, returning None if unavailable or not needed."""
-    if experiment == "baseline":
+    if is_baseline_experiment(experiment):
         return None
     try:
         from src.rag.retriever import build_translation_context
-        rag_result = build_translation_context(python_code, embedding_backend=embedding_backend)
+        rag_result = build_translation_context(
+            python_code,
+            embedding_backend=embedding_backend,
+            go_signature=go_signature,
+        )
         log_rag_retrieval(rag_result)
         return rag_result
     except Exception:
@@ -233,6 +266,8 @@ def _setup_and_display_kb(
         "parallel_corpus": "Parallel Corpus",
         "api_mappings":    "API Mappings",
         "documentation":   "Go Docs",
+        "api_sequences":   "API Sequences",
+        "translation_traps": "Translation Traps",
     }
     parts = []
     for key, label in labels.items():
@@ -240,8 +275,15 @@ def _setup_and_display_kb(
         tag = "[green]ON[/green]" if enabled else "[red]OFF[/red]"
         parts.append(f"{label}: {tag}")
     console.print(f"   RAG: {' | '.join(parts)}")
-    backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
-    console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
+    uses_embeddings = any(
+        toggles.get(key, False)
+        for key in ("grammar", "parallel_corpus", "api_mappings", "documentation", "api_sequences")
+    )
+    if uses_embeddings:
+        backend_label = "Vertex AI + Gemini" if embedding_backend == "gemini" else "ChromaDB"
+        console.print(f"   Embedding: [cyan]{backend_label}[/cyan]")
+    else:
+        console.print("   Embedding: [dim]not used (deterministic trap routing)[/dim]")
 
 
 def _parse_target_path(target_dir: Path) -> tuple[str, str, str, str | None, int | None]:
@@ -300,6 +342,10 @@ def preflight_check(console: Console, enabled_models: list[tuple[str, str, objec
             continue
         checked_providers.add(provider_key)
 
+        if provider_key == "lmstudio":
+            console.print(f"[green]OK[/green]   {provider_key} uses a local server and does not require an API key")
+            continue
+
         vertex_vars = get_model_vertex_env_vars(provider_key)
         if vertex_vars and os.getenv(vertex_vars[0], "").lower() == "true":
             missing = [v for v in vertex_vars if not os.getenv(v)]
@@ -357,12 +403,33 @@ def translate(
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
     run_id: int | None = None,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> None:
     """Dispatch translation to the appropriate pipeline based on dataset."""
     if dataset == "local":
-        _translate_local(source_dir, LOCAL_TARGET_DIR, skip_preflight, sample=sample, experiment=experiment, embedding_backend=embedding_backend)
+        _translate_local(
+            source_dir,
+            LOCAL_TARGET_DIR,
+            skip_preflight,
+            sample=sample,
+            experiment=experiment,
+            embedding_backend=embedding_backend,
+            prompt_format=prompt_format,
+            retrieval_contract=retrieval_contract,
+        )
     elif dataset == "humaneval-x":
-        _translate_humaneval_x(HUMANEVAL_X_DIR, skip_preflight, sample=sample, problems=problems, experiment=experiment, embedding_backend=embedding_backend, run_id=run_id)
+        _translate_humaneval_x(
+            HUMANEVAL_X_DIR,
+            skip_preflight,
+            sample=sample,
+            problems=problems,
+            experiment=experiment,
+            embedding_backend=embedding_backend,
+            run_id=run_id,
+            prompt_format=prompt_format,
+            retrieval_contract=retrieval_contract,
+        )
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -374,6 +441,8 @@ def _translate_local(
     sample: int | None = None,
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> None:
     """Translate local Python files to Go.
 
@@ -407,7 +476,7 @@ def _translate_local(
     )
 
     for provider_key, variant_key, model in enabled:
-        if experiment == "baseline":
+        if is_baseline_experiment(experiment):
             model_target_dir = target_dir / provider_key / variant_key / experiment
         elif embedding_backend == "gemini":
             model_target_dir = target_dir / provider_key / variant_key / "vec-gemini" / experiment
@@ -426,7 +495,10 @@ def _translate_local(
 
         from src.rag.retriever import get_active_kb_toggles as _get_kb_toggles
         _kb_toggles = _get_kb_toggles(experiment)
-        _prompt_builder = PromptBuilder()
+        _prompt_builder = PromptBuilder(
+            prompt_format=prompt_format,
+            retrieval_contract=retrieval_contract,
+        )
 
         def _translate_one(py_file: Path, stagger_delay: float = 0) -> dict:
             time.sleep(stagger_delay)
@@ -437,7 +509,10 @@ def _translate_local(
             target_file.parent.mkdir(parents=True, exist_ok=True)
 
             rag_result = _get_rag_result(python_code, experiment, embedding_backend)
-            prompt = _prompt_builder.build_local(python_code, rag_result=rag_result)
+            prompt = _prompt_builder.build_local(
+                python_code,
+                rag_result=rag_result if rag_result_has_usable_items(rag_result) else None,
+            )
             log_prompt(prompt)
 
             try:
@@ -506,6 +581,8 @@ def _translate_humaneval_x(
     experiment: str = "baseline",
     embedding_backend: str = "chromadb",
     run_id: int | None = None,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> None:
     """Translate HumanEval-X Python problems into per-task run bundles."""
     from src.data.humaneval_x import load_humaneval_x
@@ -559,6 +636,8 @@ def _translate_humaneval_x(
             backend_label=backend_label,
             run_id=run_id,
             task_count=len(pairs),
+            prompt_format=prompt_format,
+            retrieval_contract=retrieval_contract,
         )
         label = f"{provider_key}/{variant_key}"
         console.print(f"\n[bold blue]── Model: {label} ──[/bold blue]")
@@ -574,7 +653,14 @@ def _translate_humaneval_x(
 
         from src.rag.retriever import get_active_kb_toggles as _get_kb_toggles
         _kb_toggles = _get_kb_toggles(experiment)
-        _prompt_builder = PromptBuilder()
+        _prompt_builder = PromptBuilder(
+            prompt_format=prompt_format,
+            retrieval_contract=retrieval_contract,
+        )
+        _retrieval_overrides = _retrieval_config_overrides(
+            prompt_format=prompt_format,
+            retrieval_contract=retrieval_contract,
+        )
 
         def _translate_one(pair: dict, stagger_delay: float = 0) -> dict:
             time.sleep(stagger_delay)
@@ -583,11 +669,16 @@ def _translate_humaneval_x(
             task_paths = run_paths.task(task_num)
             log_translation_start(pair["task_id"], provider_key, variant_key)
 
-            rag_result = _get_rag_result(pair["py_solution"], experiment, embedding_backend)
+            rag_result = _get_rag_result(
+                pair["py_solution"],
+                experiment,
+                embedding_backend,
+                go_signature=pair["declaration"],
+            )
             prompt = _prompt_builder.build_humaneval_x(
                 pair["py_solution"],
                 go_signature=pair["declaration"],
-                rag_result=rag_result,
+                rag_result=rag_result if rag_result_has_usable_items(rag_result) else None,
             )
             write_json(
                 task_paths.prompt_json,
@@ -600,6 +691,8 @@ def _translate_humaneval_x(
                     experiment,
                     embedding_backend,
                     _kb_toggles,
+                    prompt_format=prompt_format,
+                    retrieval_contract=retrieval_contract,
                 ),
             )
             write_json(
@@ -609,16 +702,14 @@ def _translate_humaneval_x(
                         rag_result,
                         embedding_backend=embedding_backend,
                         kb_toggles=_kb_toggles,
+                        retrieval_config=_retrieval_overrides,
                     )
                     if rag_result is not None
-                    else {
-                        "embedding_backend": embedding_backend,
-                        "kb_toggles": _kb_toggles or {},
-                        "retrieval_config": {},
-                        "retrieval_counts": {},
-                        "items": {},
-                        "rendered_context": "",
-                    }
+                    else build_empty_retrieval_artifact(
+                        embedding_backend=embedding_backend,
+                        kb_toggles=_kb_toggles,
+                        retrieval_config=_retrieval_overrides,
+                    )
                 ),
             )
             log_prompt(prompt)
@@ -698,12 +789,13 @@ def evaluate(
     eval_target_dir: Path | None = None,
     dataset: str = "local",
     batch_size: int | None = None,
+    skip_existing: bool = False,
 ) -> None:
     """Dispatch evaluation to the appropriate pipeline based on dataset."""
     if dataset == "local":
         _evaluate_local(source_dir, eval_target_dir)
     elif dataset == "humaneval-x":
-        _evaluate_humaneval_x(eval_target_dir, batch_size=batch_size)
+        _evaluate_humaneval_x(eval_target_dir, batch_size=batch_size, skip_existing=skip_existing)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -754,6 +846,7 @@ def _evaluate_local(
 def _evaluate_humaneval_x(
     eval_target_dir: Path | None = None,
     batch_size: int | None = None,
+    skip_existing: bool = False,
 ) -> None:
     """Evaluate HumanEval-X translations using Docker.
 
@@ -787,7 +880,6 @@ def _evaluate_humaneval_x(
     if batch_size is None:
         batch_size = eval_config["parallel"]["batch_size"]
     timeout = eval_config["docker"]["timeout"]
-
     provider, variant, experiment, backend, run_id = _parse_target_path(eval_target_dir)
     run_paths = HumanEvalRunPaths(eval_target_dir)
     run_paths.ensure_evaluation_dirs()
@@ -828,6 +920,14 @@ def _evaluate_humaneval_x(
     console.print(f"Found [bold]{len(task_dirs)}[/bold] translated task bundles to evaluate.")
     console.print(f"[dim]Parallel batch size: {batch_size}[/dim]\n")
 
+    existing_records_by_target: dict[str, EvaluationRecord] = {}
+    for task_paths in task_dirs:
+        if task_paths.evaluation_result_json.exists():
+            record = EvaluationRecord.model_validate_json(
+                task_paths.evaluation_result_json.read_text(encoding="utf-8")
+            )
+            existing_records_by_target[record.target_file] = record
+
     # Build work items (skip files with no matching task)
     work_items: list[tuple[HumanEvalRunPaths, object]] = []
     skipped = 0
@@ -836,6 +936,9 @@ def _evaluate_humaneval_x(
         pair = task_lookup.get(task_num)
         if pair is None:
             console.print(f"  [yellow]SKIP[/yellow] {task_paths.task_name}: no matching HumanEval-X task")
+            skipped += 1
+            continue
+        if skip_existing and task_paths.evaluation_result_json.exists():
             skipped += 1
             continue
         work_items.append((task_paths, pair))
@@ -907,9 +1010,15 @@ def _evaluate_humaneval_x(
             executor.shutdown(wait=False, cancel_futures=True)
 
     _reporting.display_per_file_table(records, dataset="humaneval-x")
-    summary = _reporting.compute_summary(records, dataset="humaneval-x")
+    combined_records = list(existing_records_by_target.values())
+    combined_records.extend(records)
+    deduped_by_target: dict[str, EvaluationRecord] = {}
+    for record in combined_records:
+        deduped_by_target[record.target_file] = record
+    summary_records = list(deduped_by_target.values())
+    summary = _reporting.compute_summary(summary_records, dataset="humaneval-x")
     _reporting.display_summary_table(summary)
-    append_jsonl(run_paths.per_task_jsonl, [record.model_dump() for record in records])
+    append_jsonl(run_paths.per_task_jsonl, [record.model_dump() for record in summary_records])
     write_json(run_paths.summary_json, summary)
     _maybe_write_rag_diagnostics(
         provider=provider,
@@ -930,6 +1039,7 @@ _ALL_EXPERIMENTS = [
     "rag-pattern-samples",
     "rag-pattern-api-docs",
     "rag-full",
+    "rag-routed",
 ]
 
 
@@ -938,7 +1048,7 @@ def _run_experiment_subprocess(args: tuple) -> None:
 
     Must be top-level (not nested) so multiprocessing can pickle it.
     """
-    provider_key, variant_key, experiment, sample, embedding_backend, run_id = args
+    provider_key, variant_key, experiment, sample, embedding_backend, run_id, prompt_format, retrieval_contract = args
     from src.providers.registry import enable_model
     enable_model(provider_key, variant_key)
     _translate_humaneval_x(
@@ -948,6 +1058,8 @@ def _run_experiment_subprocess(args: tuple) -> None:
         experiment=experiment,
         embedding_backend=embedding_backend,
         run_id=run_id,
+        prompt_format=prompt_format,
+        retrieval_contract=retrieval_contract,
     )
 
 
@@ -957,8 +1069,10 @@ def run_all_humaneval_x(
     mode: str = "smoke",
     embedding_backend: str = "gemini",
     run_id: int | None = None,
+    prompt_format: str | None = None,
+    retrieval_contract: bool | None = None,
 ) -> None:
-    """Run all 5 experiments in parallel — one process per experiment.
+    """Run all configured experiments in parallel — one process per experiment.
 
     Args:
         provider_key: Provider identifier (e.g. "minimax").
@@ -966,6 +1080,8 @@ def run_all_humaneval_x(
         mode: "smoke" translates 10 files; "full" translates all 164.
         embedding_backend: "gemini" (Vertex AI) or "chromadb".
         run_id: Optional run number for multi-run experiments.
+        prompt_format: Optional prompt packaging override for all runs.
+        retrieval_contract: Optional retrieval contract override for all runs.
     """
     sample = 10 if mode == "smoke" else None
     console = Console()
@@ -975,9 +1091,15 @@ def run_all_humaneval_x(
     enable_model(provider_key, variant_key)
     enabled = get_enabled_models()
     run_label = f"  run={run_id}" if run_id is not None else ""
+    format_label = f"  prompt_format={prompt_format}" if prompt_format is not None else ""
+    contract_label = (
+        f"  retrieval_contract={'on' if retrieval_contract else 'off'}"
+        if retrieval_contract is not None
+        else ""
+    )
     console.print(
         f"\n[bold]run-all: {provider_key}/{variant_key}  mode={mode}  "
-        f"experiments={len(_ALL_EXPERIMENTS)}{run_label}[/bold]\n"
+        f"experiments={len(_ALL_EXPERIMENTS)}{run_label}{format_label}{contract_label}[/bold]\n"
     )
     if not preflight_check(console, enabled):
         return
@@ -985,7 +1107,16 @@ def run_all_humaneval_x(
     # Spawn one process per experiment
     processes: dict[str, multiprocessing.Process] = {}
     for experiment in _ALL_EXPERIMENTS:
-        args = (provider_key, variant_key, experiment, sample, embedding_backend, run_id)
+        args = (
+            provider_key,
+            variant_key,
+            experiment,
+            sample,
+            embedding_backend,
+            run_id,
+            prompt_format,
+            retrieval_contract,
+        )
         p = multiprocessing.Process(target=_run_experiment_subprocess, args=(args,))
         p.start()
         processes[experiment] = p

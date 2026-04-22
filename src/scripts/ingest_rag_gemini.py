@@ -21,6 +21,7 @@ from rich.progress import Progress
 from src.config import (
     API_MAPPINGS_FILE,
     GO_DOCS_FILE,
+    GO_API_SEQUENCES_FILE,
     GRAMMAR_MAPPINGS_FILE,
     PARALLEL_CORPUS_FILE,
 )
@@ -141,10 +142,29 @@ def ingest_go_docs(index, ef: GeminiEmbeddingFunction):
     console.print(f"  [green]Done![/green] Upserted {len(ids)} Go docs entries.")
 
 
+def ingest_api_sequences(index, ef: GeminiEmbeddingFunction):
+    console.print(f"\n[bold]Ingesting API sequences[/bold] from {GO_API_SEQUENCES_FILE}")
+    records = _load_jsonl(GO_API_SEQUENCES_FILE)
+    console.print(f"  Loaded {len(records)} records")
+
+    ids = []
+    documents = []
+    for i, r in enumerate(records):
+        ids.append(r.get("_id") or f"api_seq_go_{i + 1:06d}")
+        documents.append(r["sequence_text"])
+
+    console.print("  Generating Gemini embeddings...")
+    embeddings = _embed_texts(ef, documents)
+
+    console.print("  Upserting to Vertex AI...")
+    upsert_datapoints(index, ids, embeddings, "api_sequences")
+    console.print(f"  [green]Done![/green] Upserted {len(ids)} API sequence entries.")
+
+
 @click.command()
 @click.option(
     "--collection",
-    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "parallel_corpus", "all"]),
+    type=click.Choice(["grammar_mappings", "api_mappings", "go_docs", "parallel_corpus", "api_sequences", "all"]),
     default="all",
     help="Which collection(s) to ingest.",
 )
@@ -172,6 +192,8 @@ def main(collection: str):
         ingest_go_docs(index, ef)
     if collection in ("parallel_corpus", "all"):
         ingest_parallel_corpus(index, ef)
+    if collection in ("api_sequences", "all"):
+        ingest_api_sequences(index, ef)
 
     console.print("\n[bold green]All done![/bold green]")
     console.print(f"  Index: {index.resource_name}")

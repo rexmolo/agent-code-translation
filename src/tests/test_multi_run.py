@@ -75,6 +75,26 @@ class TestParseTargetPath:
         assert backend == "vec-gemini"
         assert run_id is None
 
+    def test_rule_backend_with_run(self):
+        """Non-vector backend labels should still parse as RAG runs."""
+        path = Path("/data/humaneval-x/minimax/M2.5/rule-traps/run-1/rag-traps-codenet-v1")
+        provider, variant, experiment, backend, run_id = self.parse(path)
+        assert provider == "minimax"
+        assert variant == "M2.5"
+        assert experiment == "rag-traps-codenet-v1"
+        assert backend == "rule-traps"
+        assert run_id == 1
+
+    def test_rule_backend_with_run_v3(self):
+        """The v3 trap experiment should use the same rule-traps backend label."""
+        path = Path("/data/humaneval-x/minimax/M2.5/rule-traps/run-2/rag-traps-codenet-v3")
+        provider, variant, experiment, backend, run_id = self.parse(path)
+        assert provider == "minimax"
+        assert variant == "M2.5"
+        assert experiment == "rag-traps-codenet-v3"
+        assert backend == "rule-traps"
+        assert run_id == 2
+
 
 # ---------------------------------------------------------------------------
 # discover_experiment_dirs with run-N
@@ -259,8 +279,8 @@ class TestBatchRunner:
 
     def test_queue_size_without_baseline(self):
         queue = self.build_queue([768, 3072], runs=3, include_baseline=False)
-        # 2 dims × 3 runs × 4 experiments = 24
-        assert len(queue) == 24
+        # 2 dims × 3 runs × 5 experiments = 30
+        assert len(queue) == 30
 
     def test_queue_order_rag_experiments(self):
         queue = self.build_queue([768], runs=2, include_baseline=False)
@@ -271,8 +291,19 @@ class TestBatchRunner:
 
     def test_queue_full_60_experiments(self):
         queue = self.build_queue([768, 1536, 3072], runs=5, include_baseline=False)
-        # 3 dims × 5 runs × 4 experiments = 60
-        assert len(queue) == 60
+        # 3 dims × 5 runs × 5 experiments = 75
+        assert len(queue) == 75
+
+    def test_queue_includes_rag_routed(self):
+        queue = self.build_queue([768], runs=1, include_baseline=False)
+        experiments = [item["experiment"] for item in queue]
+        assert experiments == [
+            "rag-pattern-only",
+            "rag-pattern-samples",
+            "rag-pattern-api-docs",
+            "rag-full",
+            "rag-routed",
+        ]
 
     def test_experiment_key_unique(self):
         queue = self.build_queue([768, 3072], runs=2, include_baseline=True)

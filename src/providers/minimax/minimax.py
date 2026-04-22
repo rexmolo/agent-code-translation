@@ -63,7 +63,14 @@ class MiniMax(Claude):
         return self.client
 
     def _supports_structured_outputs(self) -> bool:
-        """MiniMax does not support Anthropic's native structured outputs."""
+        """MiniMax does not support Anthropic's native structured outputs.
+
+        Also: Agno's structured path unconditionally forwards ``output_format`` to the
+        Anthropic SDK, but anthropic>=0.83 renamed that argument to ``output_config`` —
+        reporting True here would crash every request. The plain-text agent path is the
+        only viable option here; :class:`_PlainTextTranslationAgent` post-processes the
+        reply to guarantee ``package main`` and imports survive.
+        """
         return False
 
     def _using_structured_outputs(

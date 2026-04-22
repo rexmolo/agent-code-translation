@@ -6,7 +6,7 @@ An agent-based code translation system that translates Python to Go, built for t
 
 The system translates Python source code into Go, then evaluates the results with Docker-sandboxed HumanEval-X test suites. The active thesis workflow is **HumanEval-X** only.
 
-Each HumanEval-X run is stored as a structured run bundle under `data/translation/humaneval-x/...`, so prompts, retrieval context, raw/parsed model output, evaluation inputs, and run-level summaries stay separate.
+Each HumanEval-X run is stored as a structured run bundle under `data/translation/target/humaneval-x/...`, so prompts, retrieval context, raw/parsed model output, evaluation inputs, and run-level summaries stay separate.
 
 Multiple LLM providers are supported through a registry (Google Gemini, MiniMax, OpenAI), each with several model variants.
 
@@ -61,25 +61,25 @@ Walks through dataset selection, action, sample size, and model choice with arro
 uv run python -m src.cli translate
 
 # Translate HumanEval-X with a specific provider/model and experiment name
-uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-full -n 10 --skip-preflight
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-routed -n 10 --skip-preflight
 
 # Translate first 10 items only
 uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -n 10
 
-# Smoke translation for one RAG run
+# Smoke translation for one routed RAG run
 uv run python -m src.cli translate \
-  -d humaneval-x -p minimax -v M2.5 -e rag-full \
+  -d humaneval-x -p minimax -v M2.5 -e rag-routed \
   --embedding-backend chromadb --dimension 768 --run 1 -n 1 --skip-preflight
 
 # Evaluate an existing HumanEval-X run bundle
 uv run python -m src.cli evaluate \
   -d humaneval-x \
-  --target-dir data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
+  --target-dir data/translation/target/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-routed
 
 # Evaluate with custom parallelism (default batch size from config/eval_config.yaml)
 uv run python -m src.cli evaluate \
   -d humaneval-x \
-  --target-dir data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full \
+  --target-dir data/translation/target/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-routed \
   -b 20
 ```
 
@@ -100,7 +100,7 @@ Subcommand options for `translate`:
 | `-d`, `--dataset` | Dataset: `humaneval-x` (active workflow; `local` is legacy) |
 | `-p`, `--provider` | Provider key (e.g. `minimax`, `gemini`) |
 | `-v`, `--variant` | Model variant key (e.g. `M2.5`, `2.5_pro`) |
-| `-e`, `--experiment` | Experiment name: `baseline`, `rag-pattern-only`, `rag-pattern-samples`, `rag-pattern-api-docs`, `rag-full` (default: `baseline`) |
+| `-e`, `--experiment` | Experiment name: `baseline`, `rag-pattern-only`, `rag-pattern-samples`, `rag-pattern-api-docs`, `rag-full`, `rag-routed` (default: `baseline`) |
 | `--embedding-backend` | Embedding backend for RAG: `chromadb` (default) or `gemini` (Vertex AI Vector Search) |
 | `-n`, `--sample` | Translate only the first N items |
 | `--run` | Run number for multi-run experiments (e.g. `--run 1`) |
@@ -131,7 +131,7 @@ Each batch cycle translates a window of experiments, evaluates those run bundles
 
 ### Statistical Analysis
 
-After multi-run experiments complete, analyze significance across embedding dimensions. The script discovers run-level `evaluation/results/summary.json` files under `data/translation/humaneval-x/`.
+After multi-run experiments complete, analyze significance across embedding dimensions. The script discovers run-level `evaluation/results/summary.json` files under `data/translation/target/humaneval-x/`.
 
 ```bash
 # ANOVA + pairwise t-tests on Pass@1
@@ -147,8 +147,8 @@ For baseline-pass / RAG-fail comparisons, use the diagnostics script on complete
 
 ```bash
 uv run python src/scripts/diagnose_rag_regressions.py \
-  --baseline-run data/translation/humaneval-x/minimax/M2.5/baseline/run-1 \
-  --rag-run data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
+  --baseline-run data/translation/target/humaneval-x/minimax/M2.5/baseline/run-1 \
+  --rag-run data/translation/target/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-routed
 ```
 
 The script writes:
@@ -183,30 +183,32 @@ uv run pytest src/tests/ -v -m "not integration"
 
 ## RAG (Retrieval-Augmented Generation)
 
-The system uses RAG to provide the LLM with relevant context before translation: similar code examples, Python-to-Go API mappings, Go documentation, and error handling patterns.
+The system uses RAG to provide the LLM with relevant context before translation: structural syntax mappings, optional Python-Go reference examples, Python-to-Go API mappings, Go documentation, and Go API usage sequences. The `rag-routed` preset adds a rule-based router and confidence gate so only the sources that fit the current task are queried and injected.
 
 ### RAG Data Sources
 
 | Collection | Entries | Description |
 |---|---|---|
-| `grammar_mappings` | ~45 | Python-Go structural syntax patterns & paradigms |
+| `grammar_mappings` | 14 | Python-Go structural syntax patterns & paradigms |
 | `parallel_corpus` | large curated subset | Optional Python-Go reference examples from a parallel corpus |
-| `api_mappings` | ~190 | Python → Go API equivalences (e.g., `json.loads()` → `json.Unmarshal()`) |
-| `go_docs` | ~165 | Go standard library docs + error handling & API sequence patterns |
+| `api_mappings` | 189 | Python → Go API equivalences (e.g., `json.loads()` → `json.Unmarshal()`) |
+| `go_docs` | 165 | Go standard library docs and targeted API/error-handling notes |
+| `api_sequences` | 9915 | Extracted Go API usage sequences for multi-step call patterns |
 
 ### RAG Pipeline
 
 ```
 Python code
-  → tree-sitter extracts API calls + detects try/except
-  → query parallel_corpus (Dense) for optional reference examples
-  → query api_mappings (Hybrid) with extracted API names
-  → query go_docs (Hybrid) with matched Go APIs + error patterns
-  → query grammar_mappings (Dense) using raw Python code to find structural idiom mappings
-  → formatted context → LLM prompt
+  → tree-sitter extracts API calls, imports, grammar hints, and try/except usage
+  → experiment preset enables fixed KBs or `rag-routed` applies rule-based source routing
+  → query grammar_mappings (dense) for structural idiom matches
+  → query parallel_corpus (dense) for optional reference examples
+  → query api_mappings, go_docs, and api_sequences (hybrid) for API-level evidence
+  → confidence gate filters low-priority retrieval per source
+  → accepted context is formatted into the LLM prompt
 ```
 
-Retrieval uses **True Hybrid Search** (BM25 exact keyword matching + Dense embeddings for semantic similarity, merged via Reciprocal Rank Fusion) for API mappings and Go docs. The `grammar_mappings` and `parallel_corpus` collections use dense retrieval to surface structurally similar references.
+Retrieval uses **True Hybrid Search** (BM25 exact keyword matching + dense embeddings for semantic similarity, merged via Reciprocal Rank Fusion) for `api_mappings`, `go_docs`, and `api_sequences`. The `grammar_mappings` and `parallel_corpus` collections use dense retrieval to surface structurally similar references. In `rag-routed`, the router decides which sources are worth querying and the confidence gate drops results that do not meet per-source acceptance rules before prompt injection.
 
 ### Embedding Backends
 
@@ -220,42 +222,43 @@ The system supports two embedding backends for comparing embedding model perform
 Both backends use the same hybrid retrieval strategy (BM25 + dense + RRF). Select the backend via the interactive CLI or the `--embedding-backend` flag:
 
 ```bash
-uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -e rag --embedding-backend gemini -n 10
+uv run python -m src.cli translate -d humaneval-x -p gemini -v 2.5_pro -e rag-routed --embedding-backend gemini -n 10
 ```
 
 ### Ablation Experiments
 
 The system supports additive ablation experiments to measure the contribution of each RAG knowledge base component. The experiment name controls which knowledge bases are active — no manual config editing needed.
 
-| Experiment | Grammar | Parallel Corpus | API Mappings | Go Docs |
-|---|---|---|---|---|
-| `baseline` | — | — | — | — |
-| `rag-pattern-only` | ON | OFF | OFF | OFF |
-| `rag-pattern-samples` | ON | ON | OFF | OFF |
-| `rag-pattern-api-docs` | ON | OFF | ON | ON |
-| `rag-full` | ON | ON | ON | ON |
+| Experiment | Grammar | Parallel Corpus | API Mappings | Go Docs | API Sequences |
+|---|---|---|---|---|---|
+| `baseline` | — | — | — | — | — |
+| `rag-pattern-only` | ON | OFF | OFF | OFF | OFF |
+| `rag-pattern-samples` | ON | ON | OFF | OFF | OFF |
+| `rag-pattern-api-docs` | ON | OFF | ON | ON | OFF |
+| `rag-full` | ON | ON | ON | ON | OFF |
+| `rag-routed` | routed | routed | routed | routed | routed |
 
 Select an experiment via the interactive CLI or the `-e` flag:
 
 ```bash
-uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-full -n 10
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-routed -n 10
 ```
 
 For multi-run experiments, add the `--run` flag:
 
 ```bash
-uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-full --run 1
+uv run python -m src.cli translate -d humaneval-x -p minimax -v M2.5 -e rag-routed --run 1
 ```
 
 Before translation or evaluation, the active KB configuration is displayed:
 
 ```
 ── Model: minimax/M2.5 ──
-   Experiment: rag-full
+   Experiment: rag-routed
    Run: 1
-   RAG: Grammar Patterns: ON | Parallel Corpus: ON | API Mappings: ON | Go Docs: ON
+   RAG: Grammar Patterns: ON | Parallel Corpus: ON | API Mappings: ON | Go Docs: ON | API Sequences: ON
    Embedding: ChromaDB
-   Output: data/translation/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-full
+   Output: data/translation/target/humaneval-x/minimax/M2.5/vec-chroma-768/run-1/rag-routed
    Parallel batch size: 5
 ```
 
@@ -301,11 +304,15 @@ retrieval:
   parallel_corpus_k: 1
   api_mappings_k: 2
   go_docs_k: 1
+  api_sequences_k: 2
+  prompt_format: compact
+  retrieval_contract: true
 
 knowledge_bases:
   code_snippets: false   # Parallel corpus examples
   api_mappings: true     # Python -> Go API equivalences
   documentation: true    # Go standard library docs & patterns
+  api_sequences: false   # Go API usage sequence retrieval
 ```
 
 The `knowledge_bases` toggles serve as a manual fallback for custom experiment names. For the built-in experiment presets, toggles are applied automatically (see [Ablation Experiments](#ablation-experiments)).
@@ -344,7 +351,7 @@ Uses Google's `gemini-embedding-001` model (3072 dims) with Vertex AI Vector Sea
 uv run python src/scripts/ingest_rag_gemini.py
 
 # 3. Use --embedding-backend gemini when translating
-uv run python -m src.cli translate -e rag --embedding-backend gemini
+uv run python -m src.cli translate -e rag-routed --embedding-backend gemini
 ```
 
 ### Ingest Options
@@ -357,6 +364,7 @@ uv run python src/scripts/ingest_rag.py
 uv run python src/scripts/ingest_rag.py --collection parallel_corpus
 uv run python src/scripts/ingest_rag.py --collection api_mappings
 uv run python src/scripts/ingest_rag.py --collection go_docs
+uv run python src/scripts/ingest_rag.py --collection api_sequences --dimensions 3072
 ```
 
 ### Expanding RAG Data
@@ -420,19 +428,22 @@ data/
 │   ├── processed/                 # JSONL data for RAG
 │   │   ├── api_mappings.jsonl     # Python→Go API mappings (~190 entries)
 │   │   ├── go_docs.jsonl          # Go docs + patterns (~165 entries)
-│   │   └── grammar_mappings.jsonl # Python-Go structural patterns (~45 entries)
+│   │   ├── go_api_sequences.jsonl # Extracted Go API usage sequences
+│   │   └── grammar_mappings.jsonl # Python-Go structural patterns
 └── translation/
-    ├── humaneval-x/      # HumanEval-X run bundles (gitignored)
-    │   └── <provider>/<variant>/
-    │       ├── baseline/run-<N>/
-    │       └── <backend>/run-<N>/<experiment>/
-    └── target/           # Legacy local-dataset output
+    ├── source/           # Source datasets / inputs
+    └── target/
+        ├── humaneval-x/  # HumanEval-X run bundles (gitignored)
+        │   └── <provider>/<variant>/
+        │       ├── baseline/run-<N>/
+        │       └── vec-<backend>-<dim>/run-<N>/<experiment>/
+        └── local/        # Legacy local-dataset output
 ```
 
 ### HumanEval-X Run Bundle Layout
 
 ```text
-data/translation/humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/
+data/translation/target/humaneval-x/<provider>/<variant>/<backend>/run-<N>/<experiment>/
 ├── manifest.json
 ├── tasks/
 │   └── Go_<id>/

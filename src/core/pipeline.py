@@ -64,7 +64,7 @@ def _chroma_backend_label() -> str:
 def _humaneval_backend_label(experiment: str, embedding_backend: str) -> str | None:
     if is_baseline_experiment(experiment):
         return None
-    if experiment == "rag-traps-codenet-v1":
+    if experiment in {"rag-traps-codenet-v1", "rag-traps-codenet-v3"}:
         return "rule-traps"
     if embedding_backend == "gemini":
         return "vec-gemini"
@@ -789,12 +789,13 @@ def evaluate(
     eval_target_dir: Path | None = None,
     dataset: str = "local",
     batch_size: int | None = None,
+    skip_existing: bool = False,
 ) -> None:
     """Dispatch evaluation to the appropriate pipeline based on dataset."""
     if dataset == "local":
         _evaluate_local(source_dir, eval_target_dir)
     elif dataset == "humaneval-x":
-        _evaluate_humaneval_x(eval_target_dir, batch_size=batch_size)
+        _evaluate_humaneval_x(eval_target_dir, batch_size=batch_size, skip_existing=skip_existing)
     else:
         Console().print(f"[red]Unknown dataset: {dataset}[/red]")
 
@@ -845,6 +846,7 @@ def _evaluate_local(
 def _evaluate_humaneval_x(
     eval_target_dir: Path | None = None,
     batch_size: int | None = None,
+    skip_existing: bool = False,
 ) -> None:
     """Evaluate HumanEval-X translations using Docker.
 
@@ -918,6 +920,14 @@ def _evaluate_humaneval_x(
     console.print(f"Found [bold]{len(task_dirs)}[/bold] translated task bundles to evaluate.")
     console.print(f"[dim]Parallel batch size: {batch_size}[/dim]\n")
 
+    existing_records_by_target: dict[str, EvaluationRecord] = {}
+    for task_paths in task_dirs:
+        if task_paths.evaluation_result_json.exists():
+            record = EvaluationRecord.model_validate_json(
+                task_paths.evaluation_result_json.read_text(encoding="utf-8")
+            )
+            existing_records_by_target[record.target_file] = record
+
     # Build work items (skip files with no matching task)
     work_items: list[tuple[HumanEvalRunPaths, object]] = []
     skipped = 0
@@ -926,6 +936,9 @@ def _evaluate_humaneval_x(
         pair = task_lookup.get(task_num)
         if pair is None:
             console.print(f"  [yellow]SKIP[/yellow] {task_paths.task_name}: no matching HumanEval-X task")
+            skipped += 1
+            continue
+        if skip_existing and task_paths.evaluation_result_json.exists():
             skipped += 1
             continue
         work_items.append((task_paths, pair))
@@ -997,9 +1010,15 @@ def _evaluate_humaneval_x(
             executor.shutdown(wait=False, cancel_futures=True)
 
     _reporting.display_per_file_table(records, dataset="humaneval-x")
-    summary = _reporting.compute_summary(records, dataset="humaneval-x")
+    combined_records = list(existing_records_by_target.values())
+    combined_records.extend(records)
+    deduped_by_target: dict[str, EvaluationRecord] = {}
+    for record in combined_records:
+        deduped_by_target[record.target_file] = record
+    summary_records = list(deduped_by_target.values())
+    summary = _reporting.compute_summary(summary_records, dataset="humaneval-x")
     _reporting.display_summary_table(summary)
-    append_jsonl(run_paths.per_task_jsonl, [record.model_dump() for record in records])
+    append_jsonl(run_paths.per_task_jsonl, [record.model_dump() for record in summary_records])
     write_json(run_paths.summary_json, summary)
     _maybe_write_rag_diagnostics(
         provider=provider,

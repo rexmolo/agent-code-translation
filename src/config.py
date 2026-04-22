@@ -33,6 +33,9 @@ GO_DOCS_FILE = RAG_PROCESSED_DIR / "go_docs.jsonl"
 PARALLEL_CORPUS_FILE = RAG_PROCESSED_DIR / "parallel_corpus" / "codeNet" / "python_go_pairs.jsonl"
 GO_API_SEQUENCES_FILE = RAG_PROCESSED_DIR / "go_api_sequences.jsonl"
 TRANSLATION_TRAPS_CODENET_V1_FILE = RAG_PROCESSED_DIR / "translation_traps_codenet_v1.jsonl"
+TRANSLATION_TRAPS_CODENET_V2_FILE = RAG_PROCESSED_DIR / "translation_traps_codenet_v2.jsonl"
+TRANSLATION_TRAPS_CODENET_V3_FILE = RAG_PROCESSED_DIR / "translation_traps_codenet_v3.jsonl"
+TRANSLATION_TRAPS_FILE = TRANSLATION_TRAPS_CODENET_V3_FILE
 
 # --- Config files ---
 EVAL_CONFIG_PATH = REPO_ROOT / "config" / "eval_config.yaml"

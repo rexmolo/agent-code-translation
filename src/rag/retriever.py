@@ -605,6 +605,7 @@ _EXPERIMENT_KB_PRESETS: dict[str, dict[str, bool]] = {
     "rag-full":             {"grammar": True,  "parallel_corpus": True,  "api_mappings": True,  "documentation": True,  "api_sequences": False},
     "rag-routed":           {"grammar": True,  "parallel_corpus": True,  "api_mappings": True,  "documentation": True,  "api_sequences": True},
     "rag-traps-codenet-v1": {"grammar": False, "parallel_corpus": False, "api_mappings": False, "documentation": False, "api_sequences": False, "translation_traps": True},
+    "rag-traps-codenet-v3": {"grammar": False, "parallel_corpus": False, "api_mappings": False, "documentation": False, "api_sequences": False, "translation_traps": True},
 }
 
 

@@ -413,7 +413,11 @@ def translate(dataset, source_dir, target_dir, skip_preflight, experiment, provi
     "-V", "--verbose", is_flag=True, default=False,
     help="Enable verbose step-by-step logging.",
 )
-def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
+@click.option(
+    "--skip-existing", is_flag=True, default=False,
+    help="Skip HumanEval-X tasks that already have evaluation/result.json.",
+)
+def evaluate(dataset, source_dir, target_dir, batch_size, verbose, skip_existing):
     """Evaluate existing translated files."""
     if verbose:
         set_verbose(True)
@@ -424,6 +428,8 @@ def evaluate(dataset, source_dir, target_dir, batch_size, verbose):
         kwargs["eval_target_dir"] = target_dir
     if batch_size is not None:
         kwargs["batch_size"] = batch_size
+    if skip_existing:
+        kwargs["skip_existing"] = True
     _pipeline.evaluate(**kwargs)
 
 

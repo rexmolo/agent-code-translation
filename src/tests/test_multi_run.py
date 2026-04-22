@@ -85,6 +85,16 @@ class TestParseTargetPath:
         assert backend == "rule-traps"
         assert run_id == 1
 
+    def test_rule_backend_with_run_v3(self):
+        """The v3 trap experiment should use the same rule-traps backend label."""
+        path = Path("/data/humaneval-x/minimax/M2.5/rule-traps/run-2/rag-traps-codenet-v3")
+        provider, variant, experiment, backend, run_id = self.parse(path)
+        assert provider == "minimax"
+        assert variant == "M2.5"
+        assert experiment == "rag-traps-codenet-v3"
+        assert backend == "rule-traps"
+        assert run_id == 2
+
 
 # ---------------------------------------------------------------------------
 # discover_experiment_dirs with run-N

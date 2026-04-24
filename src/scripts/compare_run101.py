@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Summarize run-101 baseline vs. 5 RAG variants.
+"""Summarize run-101 baseline vs. 5 vector-RAG variants.
 
 Reads the per-run `evaluation/results/summary.json` for the baseline and each
 variant and prints a comparison table. Writes a Markdown table to the memory
-folder so the thesis notes stay self-describing.
+folder so the thesis notes stay self-describing. Trap-KB runs are excluded
+because they live under the separate top-level `rule-traps/` backend.
 """
 
 from __future__ import annotations

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run a single RAG variant for run-101 on MiniMax M2.5:
+# Run a single vector-RAG variant for run-101 on MiniMax M2.5:
 #   1. translate (164 tasks, chromadb backend)
 #   2. validate translations; retry any invalid task
 #   3. evaluate with Docker
@@ -8,6 +8,9 @@
 #   src/scripts/run_variant_101.sh <experiment>
 # where <experiment> is one of: rag-pattern-only, rag-pattern-samples,
 #   rag-pattern-api-docs, rag-full, rag-routed
+#
+# Trap-KB runs are a separate top-level category under `rule-traps/run-N/...`
+# and are intentionally not part of this run-101 vector comparison workflow.
 
 set -u
 

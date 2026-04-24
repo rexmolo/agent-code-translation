@@ -60,3 +60,6 @@ agents.md
 agent.md
 CLAUDE.md
 claude.md
+
+.uv-cache
+.hf-cache
